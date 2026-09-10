@@ -1,6 +1,19 @@
 {
     "extends": "./node_modules/pcf-scripts/tsconfig_base.json",
     "compilerOptions": {
-        "typeRoots": ["node_modules/@types"]
+        "typeRoots": ["node_modules/@types"],
+
+        // "strict" and "useUnknownInCatchVariables" already come from the
+        // Microsoft base config; they are restated so the intent survives a
+        // change to that base. "strictPropertyInitialization" stays disabled
+        // because the base config turns it off for PCF control classes.
+        "strict": true,
+        "useUnknownInCatchVariables": true,
+
+        "noUncheckedIndexedAccess": true,
+        "exactOptionalPropertyTypes": true,
+        "noImplicitOverride": true,
+        "noFallthroughCasesInSwitch": true,
+        "noImplicitReturns": true
     }
 }
