@@ -11,3 +11,11 @@ coverage/
 *.log
 .vscode/
 .idea/
+
+# Power Platform / MSBuild
+*.pcfproj.user
+*.cdsproj.user
+.vs/
+
+# Stray home-directory folder occasionally created by the PAC CLI on macOS
+~/
