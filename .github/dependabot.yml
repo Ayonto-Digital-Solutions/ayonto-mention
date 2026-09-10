@@ -1,11 +1,43 @@
 version: 2
 updates:
+  # PCF control project. The only npm manifest with dependencies.
   - package-ecosystem: "npm"
-    directory: "/"
+    directory: "/pcf"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "Update"
+    ignore:
+      # React, React DOM and Fluent UI are supplied by the Power Apps platform
+      # at runtime for virtual controls and are pinned by the
+      # <platform-library> entries in ControlManifest.Input.xml. Bumping them
+      # here alone would silently diverge from the hosted runtime, so they are
+      # upgraded manually together with the manifest.
+      - dependency-name: "react"
+      - dependency-name: "react-dom"
+      - dependency-name: "@fluentui/react-components"
+      # Type packages must stay on the major matching the platform React.
+      - dependency-name: "@types/react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react-dom"
+        update-types: ["version-update:semver-major"]
+    groups:
+      eslint:
+        patterns:
+          - "eslint*"
+          - "@eslint/*"
+          - "typescript-eslint"
+      microsoft-tooling:
+        patterns:
+          - "@microsoft/*"
+          - "@types/powerapps-component-framework"
+          - "pcf-scripts"
+          - "pcf-start"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    commit-message:
+      prefix: "Update"
