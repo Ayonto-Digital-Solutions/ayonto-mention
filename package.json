@@ -18,6 +18,8 @@
     "lint": "npm --prefix pcf run lint",
     "lint:fix": "npm --prefix pcf run lint:fix",
     "typecheck": "npm --prefix pcf run typecheck",
+    "test": "npm --prefix pcf run test",
+    "test:coverage": "npm --prefix pcf run test:coverage",
     "start": "npm --prefix pcf run start",
     "install:pcf": "npm --prefix pcf install"
   }
