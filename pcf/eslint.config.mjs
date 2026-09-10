@@ -29,7 +29,10 @@ export default [
       parserOptions: {
         ecmaVersion: 2020,
         sourceType: "module",
-        projectService: true,
+        projectService: {
+          // Config files live outside any tsconfig project.
+          allowDefaultProject: ["jest.config.js"],
+        },
         tsconfigRootDir: import.meta.dirname,
       },
     },
@@ -40,6 +43,15 @@ export default [
     settings: {
       react: {
         version: "detect",
+      },
+    },
+  },
+  {
+    // Node-based tooling config, not part of the browser bundle.
+    files: ["jest.config.js"],
+    languageOptions: {
+      globals: {
+        ...globals.node,
       },
     },
   },
