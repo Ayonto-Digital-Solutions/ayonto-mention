@@ -177,13 +177,13 @@ function editedSpan(
  * nothing can settle: deleting either leaves the same text behind. Then the
  * later one counts as the deleted one.
  */
-export function reanchorMentions(
-    mentions: readonly InsertedMention[],
+export function reanchorMentions<T extends InsertedMention>(
+    mentions: readonly T[],
     previous: string,
     text: string
-): InsertedMention[] {
+): T[] {
     const { from, to, delta } = editedSpan(previous, text);
-    const anchored: InsertedMention[] = [];
+    const anchored: T[] = [];
     // One mention in the text speaks for one record. Two records reaching for the
     // same place would otherwise both keep it, and one of them means somebody the
     // text no longer names.
@@ -210,7 +210,9 @@ export function reanchorMentions(
             continue;
         }
         taken.add(at);
-        anchored.push({ start: at, name: mention.name, userId: mention.userId });
+        // Spread, not a rebuild: whatever a caller tracks alongside a mention
+        // travels with it, and only the position changes.
+        anchored.push({ ...mention, start: at });
     }
 
     return anchored;

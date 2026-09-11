@@ -4,6 +4,8 @@ import { MessageBar, MessageBarBody, Spinner, Textarea, makeStyles, tokens } fro
 import { SuggestionList } from "./SuggestionList";
 import { applyMention, findMentionTrigger, reanchorMentions } from "../domain/mentionText";
 import type { InsertedMention, MentionTrigger } from "../domain/mentionText";
+import { sameMentionOccurrences } from "../domain/mentionLifecycle";
+import type { MentionOccurrence } from "../domain/mentionLifecycle";
 import type { UserSearchProvider, UserSuggestion } from "../domain/userSearch";
 import { useMentionSearch } from "../hooks/useMentionSearch";
 
@@ -43,6 +45,21 @@ export interface MentionEditorProps {
     readonly strings?: MentionEditorStrings | undefined;
     /** Overridable so several editors on one form do not share element ids. */
     readonly listboxId?: string | undefined;
+    /**
+     * Called once for each suggestion that is actually written into the text.
+     * Not called when the picker is closed, when the mention would not fit, or
+     * when the selection fails for any other reason.
+     */
+    readonly onMentionSelected?: ((mention: MentionOccurrence) => void) | undefined;
+    /**
+     * Called whenever the set of mentions standing in the text changes — by
+     * selecting, typing, deleting, replacing a selection, or by a host value
+     * being taken over. Never called just because React re-rendered, and never
+     * twice for the same set. The array is a fresh snapshot each time.
+     */
+    readonly onWrittenMentionsChange?:
+        | ((mentions: readonly MentionOccurrence[]) => void)
+        | undefined;
 }
 
 const useStyles = makeStyles({
@@ -71,6 +88,34 @@ const useStyles = makeStyles({
 });
 
 const DEFAULT_LISTBOX_ID = "ayonto-mention-suggestions";
+
+/**
+ * A mention this editor wrote, plus what the suggestion that created it carried.
+ *
+ * The extra data belongs to the *occurrence*, not to the person: the same user
+ * may be picked twice from suggestions that differ, and a later pick must never
+ * rewrite what an earlier occurrence recorded.
+ */
+interface TrackedMention extends InsertedMention {
+    readonly email?: string | undefined;
+}
+
+/** Keeps snapshots in text order, so an unchanged set always compares equal. */
+function byStart(left: TrackedMention, right: TrackedMention): number {
+    return left.start - right.start;
+}
+
+/** A copy with no shared references, so two snapshots can never alias. */
+function copyOccurrence(occurrence: MentionOccurrence): MentionOccurrence {
+    return occurrence.email === undefined
+        ? { start: occurrence.start, name: occurrence.name, userId: occurrence.userId }
+        : {
+              start: occurrence.start,
+              name: occurrence.name,
+              userId: occurrence.userId,
+              email: occurrence.email,
+          };
+}
 
 /**
  * A textarea that offers people when an "@" is typed.
@@ -109,18 +154,60 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
     const pendingCaret = React.useRef<number | null>(null);
 
     /** Where this editor wrote a mention, so typing on past one is not a new query. */
-    const insertedMentions = React.useRef<InsertedMention[]>([]);
+    const insertedMentions = React.useRef<TrackedMention[]>([]);
     /**
      * The text those positions were measured against. Moving them needs the edit
      * itself, not just its result: two people of the same name leave two identical
      * mentions, and only the change says which of them was deleted.
      */
     const anchoredText = React.useRef(value);
-    const reanchor = React.useCallback((next: string): InsertedMention[] => {
+    const reanchor = React.useCallback((next: string): TrackedMention[] => {
         insertedMentions.current = reanchorMentions(insertedMentions.current, anchoredText.current, next);
         anchoredText.current = next;
         return insertedMentions.current;
     }, []);
+
+    // Held in refs so a caller passing inline callbacks does not change the
+    // identity of everything downstream on every render.
+    const onMentionSelectedRef = React.useRef(props.onMentionSelected);
+    onMentionSelectedRef.current = props.onMentionSelected;
+    const onWrittenMentionsChangeRef = React.useRef(props.onWrittenMentionsChange);
+    onWrittenMentionsChangeRef.current = props.onWrittenMentionsChange;
+
+    /** The last set that was reported, so an unchanged set is not reported again. */
+    const reportedMentions = React.useRef<readonly MentionOccurrence[]>([]);
+
+    const toOccurrence = React.useCallback(
+        (mention: TrackedMention): MentionOccurrence =>
+            mention.email === undefined
+                ? { start: mention.start, name: mention.name, userId: mention.userId }
+                : {
+                      start: mention.start,
+                      name: mention.name,
+                      userId: mention.userId,
+                      email: mention.email,
+                  },
+        []
+    );
+
+    /**
+     * Reports the mentions standing in the text, if they have changed.
+     *
+     * Called after each place the recorded mentions are rewritten, never from a
+     * render, so what a caller sees is the logical set and not React's timing.
+     */
+    const reportWrittenMentions = React.useCallback(() => {
+        const snapshot = insertedMentions.current.map(toOccurrence);
+        if (sameMentionOccurrences(reportedMentions.current, snapshot)) {
+            return;
+        }
+        reportedMentions.current = snapshot;
+        // The caller gets its own graph, down to each occurrence. What is handed
+        // out must never be what the comparison above will read next time:
+        // `readonly` is a compile-time promise, and ordinary JavaScript can still
+        // write through it.
+        onWrittenMentionsChangeRef.current?.(snapshot.map(copyOccurrence));
+    }, [toOccurrence]);
 
     // A disabled field offers nobody, and a query is only ever what the caret is on.
     const query = props.disabled ? null : (trigger?.query ?? null);
@@ -144,10 +231,12 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
         (next: string) => {
             setText(next);
             reanchor(next);
+            // A host value can take a mention out from under the editor.
+            reportWrittenMentions();
             emittedValues.current = new Set<string>([next]);
             pendingHostValue.current = null;
         },
-        [reanchor]
+        [reanchor, reportWrittenMentions]
     );
 
     /**
@@ -237,6 +326,7 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
             // Editing in front of a mention moves it, so the recorded ones are put
             // back where they now sit before they are consulted.
             reanchor(nextText);
+            reportWrittenMentions();
             const found = findMentionTrigger(nextText, caret);
 
             // A query may hold a space because names do, so carrying the sentence on
@@ -275,7 +365,7 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
                 return next;
             });
         },
-        [reanchor]
+        [reanchor, reportWrittenMentions]
     );
 
     const handleChange = React.useCallback(
@@ -312,11 +402,19 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
                 return;
             }
 
-            const written: InsertedMention = {
-                start: trigger.start,
-                name: user.name.trim(),
-                userId: user.id,
-            };
+            const pickedEmail = (user.email ?? "").trim();
+            // The address is recorded on this occurrence, not against the user:
+            // picking the same person again later, from a suggestion that carries
+            // something different, must not rewrite what this one recorded.
+            const written: TrackedMention =
+                pickedEmail.length > 0
+                    ? {
+                          start: trigger.start,
+                          name: user.name.trim(),
+                          userId: user.id,
+                          email: pickedEmail,
+                      }
+                    : { start: trigger.start, name: user.name.trim(), userId: user.id };
             const writtenEnd = written.start + written.name.length + 1;
             insertedMentions.current = [
                 // The new mention takes the space the query stood in, so anything
@@ -327,13 +425,32 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
                         mention.start >= writtenEnd
                 ),
                 written,
-            ];
+                // Text order, always. The new mention may belong before the ones
+                // already recorded, and an unchanged set must keep comparing
+                // equal rather than look changed because the order shifted.
+            ].sort(byStart);
 
             pendingCaret.current = result.caret;
             commit(result.text);
             closeSuggestions();
+
+            // Reported only once the mention is actually in the text: a refused
+            // or impossible selection must look like nothing happened.
+            const occurrence = toOccurrence(written);
+            reportWrittenMentions();
+            onMentionSelectedRef.current?.(occurrence);
         },
-        [closeSuggestions, commit, props.maxLength, reanchor, strings.mentionTooLong, text, trigger]
+        [
+            closeSuggestions,
+            commit,
+            props.maxLength,
+            reanchor,
+            reportWrittenMentions,
+            strings.mentionTooLong,
+            text,
+            toOccurrence,
+            trigger,
+        ]
     );
 
     const handleKeyDown = React.useCallback(
