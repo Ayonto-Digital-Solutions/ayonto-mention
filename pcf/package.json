@@ -44,6 +44,6 @@
     "react": "^16.14.0",
     "ts-jest": "^29.4.12",
     "typescript": "^5.8.3",
-    "typescript-eslint": "8.44.0"
+    "typescript-eslint": "8.70.0"
   }
 }
