@@ -93,6 +93,14 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
     );
 
     const [text, setText] = React.useState(value);
+    /**
+     * The text on screen right now. Held in a ref so the reconciliation effect
+     * can consult it without listing it as a dependency: re-running that effect
+     * on every keystroke would resurrect a waiting host value that the very
+     * keystroke had just superseded.
+     */
+    const textRef = React.useRef(text);
+    textRef.current = text;
     const [trigger, setTrigger] = React.useState<MentionTrigger | null>(null);
     const [message, setMessage] = React.useState<string | undefined>(undefined);
 
@@ -158,8 +166,18 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
      *    convergence step, and it is driven explicitly from the blur handler
      *    rather than by an effect firing again.
      * 5. While the field is not being edited, a host value applies at once.
+     * 6. When the host reports exactly what the editor already shows, the two
+     *    agree. That is an acknowledgement point, and the older emitted values
+     *    are forgotten: past that point they can no longer be told apart from a
+     *    genuine host decision, so keeping them would make a value the editor
+     *    once emitted impossible for the host to ever set again.
      */
     React.useEffect(() => {
+        if (value === textRef.current) {
+            emittedValues.current = new Set<string>([value]);
+            pendingHostValue.current = null;
+            return;
+        }
         if (emittedValues.current.has(value)) {
             return;
         }

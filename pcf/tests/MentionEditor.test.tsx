@@ -791,6 +791,26 @@ describe("MentionEditor value reconciliation", () => {
         expect(field().selectionStart).toBe(5);
     });
 
+    it("lets the host set a value the editor emitted before, once it was acknowledged", () => {
+        // The host owns the column and may legitimately put back a value this
+        // editor happened to send earlier. Once host and editor have agreed on
+        // the current text, the older emitted values must stop shadowing that.
+        render(props({ value: "A" }));
+        focusField();
+        type("AB");
+
+        // The host catches up and reports exactly what the editor shows.
+        render(props({ value: "AB" }));
+        expect(field().value).toBe("AB");
+
+        blurField();
+
+        // Later, with nobody editing, the host decides on "A" again.
+        render(props({ value: "A" }));
+
+        expect(field().value).toBe("A");
+    });
+
     it("takes a later host value over normally after one was adopted on blur", () => {
         render(props({ value: "" }));
         focusField();
