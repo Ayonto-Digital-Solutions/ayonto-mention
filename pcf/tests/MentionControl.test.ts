@@ -5,6 +5,7 @@ import { Simulate, act } from "react-dom/test-utils";
 import { MentionControl } from "../MentionControl/index";
 import type { IInputs } from "../MentionControl/generated/ManifestTypes";
 import type { MentionEditorProps } from "../src/components/MentionEditor";
+import type { MentionRecordContext } from "../src/domain/recordContext";
 import { MENTION_SEARCH_DEBOUNCE_MS } from "../src/hooks/useMentionSearch";
 
 interface HostOptions {
@@ -14,6 +15,12 @@ interface HostOptions {
     readonly maxLength?: number;
     readonly label?: string;
     readonly webApi?: ComponentFramework.WebApi;
+    readonly recordId?: string | null;
+    readonly recordTable?: string | null;
+    /** Logical name of the bound column, as the field metadata reports it. */
+    readonly logicalName?: string | null;
+    /** Omits the field metadata entirely, as a host may do. */
+    readonly withoutAttributes?: boolean;
 }
 
 /** Records every Web API call the control makes. */
@@ -37,12 +44,26 @@ function makeContext(options: HostOptions = {}): ComponentFramework.Context<IInp
         parameters: {
             field: {
                 raw: options.value === undefined ? "" : options.value,
+                // A host normally reports the bound column's metadata, but it is
+                // optional in the framework's own typings.
                 attributes:
-                    options.maxLength === undefined ? undefined : { MaxLength: options.maxLength },
+                    options.withoutAttributes === true
+                        ? undefined
+                        : {
+                              MaxLength: options.maxLength,
+                              LogicalName:
+                                  options.logicalName === undefined
+                                      ? "description"
+                                      : options.logicalName,
+                          },
                 security:
                     options.editable === undefined
                         ? undefined
                         : { editable: options.editable, readable: true, secured: false },
+            },
+            recordId: { raw: options.recordId === undefined ? "" : options.recordId },
+            recordTable: {
+                raw: options.recordTable === undefined ? "account" : options.recordTable,
             },
         },
         mode: {
@@ -120,6 +141,19 @@ function advance(ms: number = MENTION_SEARCH_DEBOUNCE_MS): void {
     act(() => {
         jest.advanceTimersByTime(ms);
     });
+}
+
+/**
+ * TEST ONLY. Reads the adapter's private record context.
+ *
+ * `private` is a compile-time notion, so the field is there at runtime. Reaching
+ * it through a cast confined to this file keeps the production class API to the
+ * four framework lifecycle methods: the control exposes no accessor that exists
+ * only so a test can look inside, and the persistence step will read the field
+ * directly from within the class.
+ */
+function recordContextOf(control: MentionControl): MentionRecordContext | null {
+    return (control as unknown as { recordContext: MentionRecordContext | null }).recordContext;
 }
 
 /** Reads the props the adapter hands to the editor, without rendering them. */
@@ -422,5 +456,107 @@ describe("MentionControl adapter", () => {
         expect(() => {
             control.destroy();
         }).not.toThrow();
+    });
+});
+
+describe("MentionControl record context", () => {
+    const GUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+    it("resolves a configured record into a normalized context", () => {
+        const { control } = start({
+            recordId: `{${GUID.toUpperCase()}}`,
+            recordTable: "Account",
+            logicalName: "Description",
+        });
+
+        expect(recordContextOf(control)).toEqual({
+            recordId: GUID,
+            recordTable: "account",
+            sourceField: "description",
+        });
+    });
+
+    it("takes the column name from the bound field metadata", () => {
+        const { control } = start({
+            recordId: GUID,
+            recordTable: "contact",
+            logicalName: "ayonto_comment",
+        });
+
+        expect(recordContextOf(control)?.sourceField).toBe("ayonto_comment");
+    });
+
+    it("reports no context, without failing, while the record has no id", () => {
+        // A form for a record Dataverse has not saved yet.
+        const { control } = start({ value: "A", recordId: "" });
+
+        expect(recordContextOf(control)).toBeNull();
+        expect(field().value).toBe("A");
+    });
+
+    it("copes with a host that reports no field metadata at all", () => {
+        const { control } = start({ value: "A", recordId: GUID, withoutAttributes: true });
+
+        // No column name to anchor a mention to, and no length limit to apply.
+        expect(recordContextOf(control)).toBeNull();
+        expect(field().getAttribute("maxlength")).toBeNull();
+        expect(field().value).toBe("A");
+    });
+
+    it("reports no context when the column metadata is unavailable", () => {
+        const { control } = start({ recordId: GUID, logicalName: null });
+
+        expect(recordContextOf(control)).toBeNull();
+    });
+
+    it("reports no context without a configured table", () => {
+        const { control } = start({ recordId: GUID, recordTable: "" });
+
+        expect(recordContextOf(control)).toBeNull();
+    });
+
+    it("recognises a record id that only appears on a later update", () => {
+        // The record is saved while the form is open, and the host starts
+        // reporting its id.
+        const { control } = start({ recordId: "" });
+        expect(recordContextOf(control)).toBeNull();
+
+        render(control, makeContext({ recordId: `{${GUID.toUpperCase()}}` }));
+
+        expect(recordContextOf(control)).toEqual({
+            recordId: GUID,
+            recordTable: "account",
+            sourceField: "description",
+        });
+    });
+
+    it("follows a change of the configured table", () => {
+        const { control } = start({ recordId: GUID, recordTable: "account" });
+        expect(recordContextOf(control)?.recordTable).toBe("account");
+
+        render(control, makeContext({ recordId: GUID, recordTable: "Contact" }));
+
+        expect(recordContextOf(control)?.recordTable).toBe("contact");
+    });
+
+    it("does not notify the framework for a record-context change", () => {
+        const { control } = start({ recordId: "" });
+
+        render(control, makeContext({ recordId: GUID }));
+        render(control, makeContext({ recordId: GUID, recordTable: "contact" }));
+
+        expect(recordContextOf(control)).not.toBeNull();
+        expect(notifyCount).toBe(0);
+    });
+
+    it("does not call the Web API merely to resolve a record context", () => {
+        const recorded: RecordedCall[] = [];
+        const { control } = start({ recordId: GUID, webApi: makeWebApi(recorded) });
+
+        render(control, makeContext({ recordId: GUID, recordTable: "contact" }));
+        advance();
+
+        expect(recordContextOf(control)).not.toBeNull();
+        expect(recorded).toEqual([]);
     });
 });
