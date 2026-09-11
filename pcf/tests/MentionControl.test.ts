@@ -1,80 +1,426 @@
 import * as React from "react";
 import * as ReactDOM from "react-dom";
-import { act } from "react-dom/test-utils";
+import { Simulate, act } from "react-dom/test-utils";
 
 import { MentionControl } from "../MentionControl/index";
+import type { IInputs } from "../MentionControl/generated/ManifestTypes";
+import type { MentionEditorProps } from "../src/components/MentionEditor";
+import { MENTION_SEARCH_DEBOUNCE_MS } from "../src/hooks/useMentionSearch";
 
-/**
- * The context and state types are derived from the control itself rather than
- * imported from `generated/ManifestTypes`, so this suite stays valid when the
- * manifest gains properties.
- */
-type ControlContext = Parameters<MentionControl["init"]>[0];
-type ControlState = Parameters<MentionControl["init"]>[2];
+interface HostOptions {
+    readonly value?: string | null;
+    readonly disabled?: boolean;
+    readonly editable?: boolean;
+    readonly maxLength?: number;
+    readonly label?: string;
+    readonly webApi?: ComponentFramework.WebApi;
+}
 
-const createContext = (): ControlContext => ({}) as unknown as ControlContext;
-// ControlState is ComponentFramework.Dictionary, an index signature that an
-// empty object already satisfies, so no assertion is needed here. The context
-// above is a different matter: it has fourteen required members.
-const createState = (): ControlState => ({});
+/** Records every Web API call the control makes. */
+interface RecordedCall {
+    readonly entity: string;
+    readonly options: string;
+}
+
+function makeWebApi(recorded: RecordedCall[] = []): ComponentFramework.WebApi {
+    return {
+        retrieveMultipleRecords: jest.fn((entity: string, options?: string) => {
+            recorded.push({ entity, options: options ?? "" });
+            return Promise.resolve({ entities: [], nextLink: "" });
+        }),
+    } as unknown as ComponentFramework.WebApi;
+}
+
+/** A host context. Every value is fictional. */
+function makeContext(options: HostOptions = {}): ComponentFramework.Context<IInputs> {
+    return {
+        parameters: {
+            field: {
+                raw: options.value === undefined ? "" : options.value,
+                attributes:
+                    options.maxLength === undefined ? undefined : { MaxLength: options.maxLength },
+                security:
+                    options.editable === undefined
+                        ? undefined
+                        : { editable: options.editable, readable: true, secured: false },
+            },
+        },
+        mode: {
+            isControlDisabled: options.disabled ?? false,
+            label: options.label ?? "Comment",
+        },
+        webAPI: options.webApi ?? makeWebApi(),
+    } as unknown as ComponentFramework.Context<IInputs>;
+}
+
+let container: HTMLDivElement;
+let notifyCount = 0;
+
+/** jsdom implements no scrollIntoView, and SuggestionList uses it. */
+const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+    Element.prototype,
+    "scrollIntoView"
+);
+
+function start(options: HostOptions = {}): {
+    control: MentionControl;
+    context: ComponentFramework.Context<IInputs>;
+} {
+    const control = new MentionControl();
+    const context = makeContext(options);
+    control.init(
+        context,
+        () => {
+            notifyCount += 1;
+        },
+        {}
+    );
+    render(control, context);
+    return { control, context };
+}
+
+function render(control: MentionControl, context: ComponentFramework.Context<IInputs>): void {
+    act(() => {
+        ReactDOM.render(control.updateView(context), container);
+    });
+}
+
+function field(): HTMLTextAreaElement {
+    const element = container.querySelector("textarea");
+    if (element === null) {
+        throw new Error("no textarea rendered");
+    }
+    return element;
+}
+
+/** Replaces the text as a keystroke would, leaving the caret at the end. */
+function type(next: string): void {
+    const element = field();
+    act(() => {
+        element.value = next;
+        element.setSelectionRange(next.length, next.length);
+        Simulate.change(element);
+    });
+}
+
+/** Really focuses the textarea, so the editor treats what follows as editing. */
+function focusField(): void {
+    act(() => {
+        Simulate.focus(field());
+    });
+}
+
+function blurField(): void {
+    act(() => {
+        Simulate.blur(field());
+    });
+}
+
+function advance(ms: number = MENTION_SEARCH_DEBOUNCE_MS): void {
+    act(() => {
+        jest.advanceTimersByTime(ms);
+    });
+}
+
+/** Reads the props the adapter hands to the editor, without rendering them. */
+function editorProps(
+    control: MentionControl,
+    context: ComponentFramework.Context<IInputs>
+): MentionEditorProps {
+    return control.updateView(context).props as MentionEditorProps;
+}
+
+beforeEach(() => {
+    jest.useFakeTimers();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    notifyCount = 0;
+
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+        configurable: true,
+        writable: true,
+        value: function stubbedScrollIntoView(): void {
+            // Scrolling is not what these tests are about.
+        },
+    });
+});
+
+afterEach(() => {
+    act(() => {
+        ReactDOM.unmountComponentAtNode(container);
+    });
+    container.remove();
+    jest.useRealTimers();
+
+    if (originalScrollIntoView === undefined) {
+        delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    } else {
+        Object.defineProperty(Element.prototype, "scrollIntoView", originalScrollIntoView);
+    }
+});
 
 describe("MentionControl adapter", () => {
-    let control: MentionControl;
-    let notifyOutputChanged: jest.Mock<void, []>;
+    it("renders the bound value it was initialized with", () => {
+        start({ value: "Hello from the host" });
 
-    beforeEach(() => {
-        control = new MentionControl();
-        notifyOutputChanged = jest.fn<void, []>();
+        expect(field().value).toBe("Hello from the host");
     });
 
-    it("initializes without invoking the framework callback", () => {
-        expect(() =>
-            control.init(createContext(), notifyOutputChanged, createState())
-        ).not.toThrow();
+    it("treats an empty bound column as an empty string", () => {
+        const { control } = start({ value: null });
 
-        // The framework must only be notified when outputs actually change.
-        expect(notifyOutputChanged).not.toHaveBeenCalled();
+        expect(field().value).toBe("");
+        expect(control.getOutputs()).toEqual({ field: "" });
     });
 
-    it("returns a valid React element from updateView", () => {
-        control.init(createContext(), notifyOutputChanged, createState());
+    it("returns a React element from updateView", () => {
+        const { control, context } = start();
 
-        expect(React.isValidElement(control.updateView(createContext()))).toBe(true);
+        expect(React.isValidElement(control.updateView(context))).toBe(true);
     });
 
-    it("mounts the element returned by updateView into the DOM", () => {
-        control.init(createContext(), notifyOutputChanged, createState());
+    it("never notifies the framework just for rendering", () => {
+        const { control, context } = start({ value: "A" });
 
-        const container = document.createElement("div");
-        document.body.appendChild(container);
+        render(control, context);
+        render(control, context);
+        render(control, makeContext({ value: "B" }));
 
-        expect(() => {
-            act(() => {
-                ReactDOM.render(control.updateView(createContext()), container);
-            });
-        }).not.toThrow();
-
-        // Rendering alone must never trigger an output notification.
-        expect(notifyOutputChanged).not.toHaveBeenCalled();
-
-        act(() => {
-            ReactDOM.unmountComponentAtNode(container);
-        });
-        container.remove();
+        expect(notifyCount).toBe(0);
     });
 
-    it("exposes outputs as an object", () => {
-        control.init(createContext(), notifyOutputChanged, createState());
+    it("notifies the framework exactly once for a local edit", () => {
+        start({ value: "A" });
 
-        const outputs = control.getOutputs();
+        type("AB");
 
-        expect(outputs).toBeDefined();
-        expect(typeof outputs).toBe("object");
+        expect(notifyCount).toBe(1);
+    });
+
+    it("reports the edited value as its output", () => {
+        const { control } = start({ value: "A" });
+
+        type("AB");
+
+        expect(control.getOutputs()).toEqual({ field: "AB" });
+    });
+
+    it("does not let a stale host echo revert the local edit", () => {
+        const { control } = start({ value: "A" });
+        type("AB");
+
+        // The host has not caught up yet and still reports the old value.
+        render(control, makeContext({ value: "A" }));
+
+        expect(control.getOutputs()).toEqual({ field: "AB" });
+        expect(field().value).toBe("AB");
+    });
+
+    it("treats the host reporting the local value as an acknowledgement", () => {
+        const { control } = start({ value: "A" });
+        type("AB");
+
+        render(control, makeContext({ value: "AB" }));
+
+        expect(control.getOutputs()).toEqual({ field: "AB" });
+        expect(field().value).toBe("AB");
+    });
+
+    it("accepts a previously used value again once the edit was acknowledged", () => {
+        const { control } = start({ value: "A" });
+        type("AB");
+        render(control, makeContext({ value: "AB" }));
+
+        // "A" was the value before the edit, but nothing is outstanding any more,
+        // so this is the host deciding, not an echo.
+        render(control, makeContext({ value: "A" }));
+
+        expect(control.getOutputs()).toEqual({ field: "A" });
+        expect(field().value).toBe("A");
+    });
+
+    it("ignores a host report of an earlier output while a newer one is pending", () => {
+        // A -> AB -> ABC, and the host is still two keystrokes behind.
+        const { control } = start({ value: "A" });
+        type("AB");
+        type("ABC");
+
+        render(control, makeContext({ value: "AB" }));
+
+        expect(field().value).toBe("ABC");
+        expect(control.getOutputs()).toEqual({ field: "ABC" });
+    });
+
+    it("keeps the edit outstanding after ignoring an earlier output echo", () => {
+        const { control } = start({ value: "A" });
+        type("AB");
+        type("ABC");
+        render(control, makeContext({ value: "AB" }));
+
+        // Still waiting: the acknowledgement of the current output still lands.
+        render(control, makeContext({ value: "ABC" }));
+
+        expect(control.getOutputs()).toEqual({ field: "ABC" });
+        expect(field().value).toBe("ABC");
+    });
+
+    it("accepts an earlier output as a genuine host value once the cycle closed", () => {
+        const { control } = start({ value: "A" });
+        type("AB");
+        type("ABC");
+        render(control, makeContext({ value: "ABC" }));
+
+        // The cycle is closed, so "AB" is the host deciding, not a late echo.
+        render(control, makeContext({ value: "AB" }));
+
+        expect(control.getOutputs()).toEqual({ field: "AB" });
+        expect(field().value).toBe("AB");
+    });
+
+    it("acknowledges an output that happens to equal the value the cycle started from", () => {
+        // A -> AB -> back to A. The host reporting "A" acknowledges the current
+        // output; reading it as the pre-edit baseline would leave the control
+        // waiting for an acknowledgement that already arrived.
+        const { control } = start({ value: "A" });
+        type("AB");
+        type("A");
+
+        render(control, makeContext({ value: "A" }));
+        expect(control.getOutputs()).toEqual({ field: "A" });
+
+        // The cycle closed, so an ordinary host value applies again at once.
+        render(control, makeContext({ value: "Set elsewhere" }));
+
+        expect(control.getOutputs()).toEqual({ field: "Set elsewhere" });
+        expect(field().value).toBe("Set elsewhere");
+    });
+
+    it("adopts a genuinely different host value while an edit is outstanding", () => {
+        const { control } = start({ value: "A" });
+        type("AB");
+
+        // Neither the outstanding edit nor the value it replaced: a business rule
+        // or another control decided this.
+        render(control, makeContext({ value: "Set elsewhere" }));
+
+        expect(control.getOutputs()).toEqual({ field: "Set elsewhere" });
+        expect(field().value).toBe("Set elsewhere");
+    });
+
+    it("keeps a newer local edit ahead of an older host value", () => {
+        const { control } = start({ value: "A" });
+        type("AB");
+        render(control, makeContext({ value: "A" }));
+
+        // Editing carries on while the host is still behind.
+        type("ABC");
+        render(control, makeContext({ value: "A" }));
+
+        expect(control.getOutputs()).toEqual({ field: "ABC" });
+        expect(field().value).toBe("ABC");
+        expect(notifyCount).toBe(2);
+    });
+
+    it("disables the editor when the host disables the control", () => {
+        start({ value: "A", disabled: true });
+
+        expect(field().disabled).toBe(true);
+    });
+
+    it("disables the editor for a column the user may not write to", () => {
+        start({ value: "A", editable: false });
+
+        expect(field().disabled).toBe(true);
+    });
+
+    it("passes the column length limit on to the editor", () => {
+        start({ value: "A", maxLength: 250 });
+
+        expect(field().getAttribute("maxlength")).toBe("250");
+    });
+
+    it("uses the host label as the accessible name", () => {
+        start({ value: "A", label: "Internal note" });
+
+        expect(field().getAttribute("aria-label")).toBe("Internal note");
+    });
+
+    it("falls back to a neutral name when the host label is empty", () => {
+        start({ value: "A", label: "   " });
+
+        expect(field().getAttribute("aria-label")).toBe("Ayonto Mention");
+    });
+
+    it("gives two controls on one form different listbox ids", () => {
+        const first = new MentionControl();
+        const second = new MentionControl();
+        const context = makeContext({ value: "A" });
+        first.init(context, () => undefined, {});
+        second.init(context, () => undefined, {});
+
+        const firstId = editorProps(first, context).listboxId;
+        const secondId = editorProps(second, context).listboxId;
+
+        expect(firstId).toBeDefined();
+        expect(secondId).toBeDefined();
+        expect(firstId).not.toBe(secondId);
+    });
+
+    it("keeps the same listbox id across renders of one control", () => {
+        const { control, context } = start({ value: "A" });
+
+        expect(editorProps(control, context).listboxId).toBe(
+            editorProps(control, context).listboxId
+        );
+    });
+
+    it("looks people up through the Web API the host supplied", () => {
+        const recorded: RecordedCall[] = [];
+        start({ value: "", webApi: makeWebApi(recorded) });
+
+        type("@Da");
+        advance();
+
+        expect(recorded).toHaveLength(1);
+        expect(recorded[0]?.entity).toBe("systemuser");
+        expect(recorded[0]?.options).toContain("contains(fullname,'Da')");
+        expect(recorded[0]?.options).toContain("isdisabled eq false");
+    });
+
+    it("protects real editing from a host value and lets a newer edit supersede it", () => {
+        const { control } = start({ value: "A" });
+
+        // Genuinely focused: Simulate.change alone does not make the editor treat
+        // the field as being edited.
+        focusField();
+        type("AB");
+        expect(control.getOutputs()).toEqual({ field: "AB" });
+
+        // An external decision arrives mid-edit. The adapter accepts it, but the
+        // editor must not pull it out from under the caret.
+        render(control, makeContext({ value: "Set elsewhere" }));
+        expect(field().value).toBe("AB");
+
+        // The user types on, which supersedes the queued host value.
+        type("ABX");
+        blurField();
+        render(control, makeContext({ value: "Set elsewhere" }));
+
+        expect(field().value).toBe("ABX");
+        expect(control.getOutputs()).toEqual({ field: "ABX" });
+
+        // The host catches up with the value actually typed.
+        render(control, makeContext({ value: "ABX" }));
+
+        expect(field().value).toBe("ABX");
+        expect(control.getOutputs()).toEqual({ field: "ABX" });
     });
 
     it("can be destroyed after initialization", () => {
-        control.init(createContext(), notifyOutputChanged, createState());
+        const { control } = start({ value: "A" });
 
-        expect(() => control.destroy()).not.toThrow();
+        expect(() => {
+            control.destroy();
+        }).not.toThrow();
     });
 });
