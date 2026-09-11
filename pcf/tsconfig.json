@@ -14,6 +14,20 @@
         "exactOptionalPropertyTypes": true,
         "noImplicitOverride": true,
         "noFallthroughCasesInSwitch": true,
-        "noImplicitReturns": true
+        "noImplicitReturns": true,
+
+        // Fluent UI v9.68.0 ships declaration files that are not written for
+        // "exactOptionalPropertyTypes": checking their internals fails on 22 errors
+        // across five node_modules/@fluentui/* packages, none of them ours.
+        //
+        // This skips checking the internals of third-party .d.ts files only. Our own
+        // source stays fully strict -- every flag above still applies to it, and our
+        // use of Fluent's types is still checked. It is not a way around a failure
+        // in this repository's own code.
+        //
+        // Reconsider when the platform Fluent UI version changes: that version is
+        // dictated by the <platform-library> entry in ControlManifest.Input.xml, and
+        // once a version type-checks cleanly this flag should be removed again.
+        "skipLibCheck": true
     }
 }
