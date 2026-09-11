@@ -13,7 +13,10 @@ type ControlContext = Parameters<MentionControl["init"]>[0];
 type ControlState = Parameters<MentionControl["init"]>[2];
 
 const createContext = (): ControlContext => ({}) as unknown as ControlContext;
-const createState = (): ControlState => ({}) as unknown as ControlState;
+// ControlState is ComponentFramework.Dictionary, an index signature that an
+// empty object already satisfies, so no assertion is needed here. The context
+// above is a different matter: it has fourteen required members.
+const createState = (): ControlState => ({});
 
 describe("MentionControl adapter", () => {
     let control: MentionControl;

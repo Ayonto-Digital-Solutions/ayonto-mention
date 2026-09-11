@@ -22,6 +22,36 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "@types/react-dom"
         update-types: ["version-update:semver-major"]
+
+      # --- Temporary compatibility boundaries -----------------------------
+      # The three guards below are not preferences: each one marks a version
+      # that cannot be installed at all, because pcf-scripts declares the
+      # conflicting package as a *required peer* and npm therefore fails with
+      # ERESOLVE before anything is built. They are deliberately narrow, so
+      # every compatible update still comes through.
+      #
+      # Revisit all three when the Microsoft PCF toolchain moves forward:
+      # a pcf-scripts release that widens its TypeScript and ESLint peers
+      # should be followed by removing the matching guard here.
+
+      # pcf-scripts@1.51.1 peers typescript at "^4.0.0 || ^5.0.0", so major 6+
+      # cannot resolve. Minor and patch updates within TypeScript 5 are wanted
+      # and are not ignored.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+
+      # @eslint/js 10 peers eslint at "^10", while pcf-scripts@1.51.1 peers it
+      # at "^8 || ^9" and eslint-plugin-react@7.37.5 caps out at "^9.7".
+      # The supported lint stack is therefore still ESLint 8/9.
+      - dependency-name: "@eslint/js"
+        update-types: ["version-update:semver-major"]
+
+      # @microsoft/eslint-plugin-power-apps 0.6.0+ requires ESLint ^10, which
+      # the same pcf-scripts peer rules out. Versions below 0.6.0 remain open,
+      # so compatible updates to this plugin still arrive.
+      - dependency-name: "@microsoft/eslint-plugin-power-apps"
+        versions: [">=0.6.0"]
+      # --------------------------------------------------------------------
     groups:
       eslint:
         patterns:
