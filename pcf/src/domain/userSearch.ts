@@ -1,0 +1,34 @@
+/**
+ * Platform-neutral contract for looking people up so they can be mentioned.
+ *
+ * Nothing here knows about Dataverse, the Power Apps component framework or any
+ * other host: the editor depends on this contract, an adapter in `../services`
+ * fulfils it, and a test double can stand in for that adapter without pulling a
+ * platform into the test.
+ */
+
+/** One person the editor may offer, as far as the picker needs to know them. */
+export interface UserSuggestion {
+    /** Stable identity of the person. Never the display name — two people can share one. */
+    readonly id: string;
+    /** The name shown in the picker and written into the text. */
+    readonly name: string;
+    /**
+     * Declared `string | undefined` rather than a plain optional so an adapter may
+     * pass through a value it did not find; `exactOptionalPropertyTypes` rejects
+     * writing `undefined` to a plain optional.
+     */
+    readonly email?: string | undefined;
+    readonly jobTitle?: string | undefined;
+}
+
+export interface UserSearchResult {
+    readonly users: readonly UserSuggestion[];
+    /** True when the source had more matches than were returned. */
+    readonly hasMore: boolean;
+}
+
+/** Anything that can answer "who matches what the user typed". */
+export interface UserSearchProvider {
+    search(term: string): Promise<UserSearchResult>;
+}
