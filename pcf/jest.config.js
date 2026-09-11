@@ -9,6 +9,8 @@
 /** @type {import('jest').Config} */
 module.exports = {
   testEnvironment: 'jsdom',
+  // Fills jsdom's missing platform APIs (see tests/setup/jsdomShims.ts).
+  setupFiles: ['<rootDir>/tests/setup/jsdomShims.ts'],
   roots: ['<rootDir>/tests'],
   testMatch: ['<rootDir>/tests/**/*.test.ts?(x)'],
   transform: {
