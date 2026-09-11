@@ -3,6 +3,8 @@ import * as React from "react";
 import { IInputs, IOutputs } from "./generated/ManifestTypes";
 import { MentionEditor } from "../src/components/MentionEditor";
 import { DataverseUserSearchService } from "../src/services/dataverseUserSearchService";
+import { resolveRecordContext } from "../src/domain/recordContext";
+import type { MentionRecordContext } from "../src/domain/recordContext";
 import type { UserSearchProvider } from "../src/domain/userSearch";
 
 /** Accessible name used when the host supplies no column label. */
@@ -50,6 +52,16 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
      * value the user has already moved past.
      */
     private readonly emittedOutputsInCycle = new Set<string>();
+    /**
+     * The record a mention would be written against, or null while it cannot be
+     * written against yet. Re-resolved on every `updateView`, never frozen at
+     * init: on a form for a new record the id only appears once Dataverse has
+     * saved it, and the table or column configuration can change too.
+     *
+     * Nothing is written with it yet; the persistence step will read this field
+     * directly, so it stays private and the class exposes no accessor for it.
+     */
+    private recordContext: MentionRecordContext | null = null;
 
     constructor() {
         instanceCount += 1;
@@ -167,6 +179,15 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
         const field = context.parameters.field;
         const hostValue = field.raw ?? "";
         this.reconcile(hostValue);
+
+        // The column name comes from the bound field's own metadata, which the
+        // framework documents and types, so the maker does not have to configure
+        // it and no host internals are touched to discover it.
+        this.recordContext = resolveRecordContext({
+            recordId: context.parameters.recordId.raw,
+            recordTable: context.parameters.recordTable.raw,
+            sourceField: field.attributes?.LogicalName,
+        });
 
         // A column the user may not write to is read-only even when the form as a
         // whole is editable.

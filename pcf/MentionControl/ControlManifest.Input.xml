@@ -15,6 +15,15 @@
     </type-group>
     <property name="field" display-name-key="Field_Display_Key" description-key="Field_Desc_Key" of-type-group="text" usage="bound" required="true" />
 
+    <!-- The framework exposes no supported, generic way for a control to learn
+         which record it is placed on, and discovering it through Xrm, the form
+         context or contextInfo is not supported code. The maker therefore binds
+         the record id and table explicitly, so persistence can stay on documented
+         APIs. The column name is NOT asked for: it is read from the bound field's
+         own metadata (attributes.LogicalName). -->
+    <property name="recordId" display-name-key="RecordId_Display_Key" description-key="RecordId_Desc_Key" of-type="SingleLine.Text" usage="input" required="true" />
+    <property name="recordTable" display-name-key="RecordTable_Display_Key" description-key="RecordTable_Desc_Key" of-type="SingleLine.Text" usage="input" required="true" />
+
     <resources>
       <code path="index.ts" order="1"/>
       <platform-library name="React" version="16.14.0" />
