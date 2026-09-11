@@ -37,7 +37,7 @@ export interface RecordContextInput {
  * platform, and a control that second-guesses it would reject records it should
  * have accepted.
  */
-function normalizeRecordId(value: string): string {
+export function normalizeDataverseId(value: string): string {
     const trimmed = value.trim();
     const unwrapped =
         trimmed.length >= 2 && trimmed.startsWith("{") && trimmed.endsWith("}")
@@ -64,7 +64,7 @@ function normalizeLogicalName(value: string): string {
  * The input is only read; nothing is mutated.
  */
 export function resolveRecordContext(input: RecordContextInput): MentionRecordContext | null {
-    const recordId = normalizeRecordId(input.recordId ?? "");
+    const recordId = normalizeDataverseId(input.recordId ?? "");
     const recordTable = normalizeLogicalName(input.recordTable ?? "");
     const sourceField = normalizeLogicalName(input.sourceField ?? "");
 
