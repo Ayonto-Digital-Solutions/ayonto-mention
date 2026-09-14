@@ -21,6 +21,10 @@ interface HostOptions {
     readonly logicalName?: string | null;
     /** Omits the field metadata entirely, as a host may do. */
     readonly withoutAttributes?: boolean;
+    /** What the host holds in the companion column. */
+    readonly metadata?: string;
+    /** Set when the host states whether the companion column may be written. */
+    readonly metadataEditable?: boolean;
 }
 
 /** Records every Web API call the control makes. */
@@ -64,6 +68,13 @@ function makeContext(options: HostOptions = {}): ComponentFramework.Context<IInp
             recordId: { raw: options.recordId === undefined ? "" : options.recordId },
             recordTable: {
                 raw: options.recordTable === undefined ? "account" : options.recordTable,
+            },
+            mentionMetadata: {
+                raw: options.metadata ?? "",
+                security:
+                    options.metadataEditable === undefined
+                        ? undefined
+                        : { editable: options.metadataEditable, readable: true, secured: false },
             },
         },
         mode: {
@@ -204,7 +215,7 @@ describe("MentionControl adapter", () => {
         const { control } = start({ value: null });
 
         expect(field().value).toBe("");
-        expect(control.getOutputs()).toEqual({ field: "" });
+        expect(control.getOutputs().field).toBe("");
     });
 
     it("returns a React element from updateView", () => {
@@ -236,7 +247,7 @@ describe("MentionControl adapter", () => {
 
         type("AB");
 
-        expect(control.getOutputs()).toEqual({ field: "AB" });
+        expect(control.getOutputs().field).toBe("AB");
     });
 
     it("does not let a stale host echo revert the local edit", () => {
@@ -246,7 +257,7 @@ describe("MentionControl adapter", () => {
         // The host has not caught up yet and still reports the old value.
         render(control, makeContext({ value: "A" }));
 
-        expect(control.getOutputs()).toEqual({ field: "AB" });
+        expect(control.getOutputs().field).toBe("AB");
         expect(field().value).toBe("AB");
     });
 
@@ -256,20 +267,24 @@ describe("MentionControl adapter", () => {
 
         render(control, makeContext({ value: "AB" }));
 
-        expect(control.getOutputs()).toEqual({ field: "AB" });
+        expect(control.getOutputs().field).toBe("AB");
         expect(field().value).toBe("AB");
     });
 
     it("accepts a previously used value again once the edit was acknowledged", () => {
         const { control } = start({ value: "A" });
         type("AB");
-        render(control, makeContext({ value: "AB" }));
+        // A real acknowledgement reports the whole output back, both columns.
+        render(
+            control,
+            makeContext({ value: "AB", metadata: control.getOutputs().mentionMetadata ?? "" })
+        );
 
         // "A" was the value before the edit, but nothing is outstanding any more,
         // so this is the host deciding, not an echo.
         render(control, makeContext({ value: "A" }));
 
-        expect(control.getOutputs()).toEqual({ field: "A" });
+        expect(control.getOutputs().field).toBe("A");
         expect(field().value).toBe("A");
     });
 
@@ -282,7 +297,7 @@ describe("MentionControl adapter", () => {
         render(control, makeContext({ value: "AB" }));
 
         expect(field().value).toBe("ABC");
-        expect(control.getOutputs()).toEqual({ field: "ABC" });
+        expect(control.getOutputs().field).toBe("ABC");
     });
 
     it("keeps the edit outstanding after ignoring an earlier output echo", () => {
@@ -294,7 +309,7 @@ describe("MentionControl adapter", () => {
         // Still waiting: the acknowledgement of the current output still lands.
         render(control, makeContext({ value: "ABC" }));
 
-        expect(control.getOutputs()).toEqual({ field: "ABC" });
+        expect(control.getOutputs().field).toBe("ABC");
         expect(field().value).toBe("ABC");
     });
 
@@ -302,12 +317,15 @@ describe("MentionControl adapter", () => {
         const { control } = start({ value: "A" });
         type("AB");
         type("ABC");
-        render(control, makeContext({ value: "ABC" }));
+        render(
+            control,
+            makeContext({ value: "ABC", metadata: control.getOutputs().mentionMetadata ?? "" })
+        );
 
         // The cycle is closed, so "AB" is the host deciding, not a late echo.
         render(control, makeContext({ value: "AB" }));
 
-        expect(control.getOutputs()).toEqual({ field: "AB" });
+        expect(control.getOutputs().field).toBe("AB");
         expect(field().value).toBe("AB");
     });
 
@@ -320,12 +338,12 @@ describe("MentionControl adapter", () => {
         type("A");
 
         render(control, makeContext({ value: "A" }));
-        expect(control.getOutputs()).toEqual({ field: "A" });
+        expect(control.getOutputs().field).toBe("A");
 
         // The cycle closed, so an ordinary host value applies again at once.
         render(control, makeContext({ value: "Set elsewhere" }));
 
-        expect(control.getOutputs()).toEqual({ field: "Set elsewhere" });
+        expect(control.getOutputs().field).toBe("Set elsewhere");
         expect(field().value).toBe("Set elsewhere");
     });
 
@@ -337,7 +355,7 @@ describe("MentionControl adapter", () => {
         // or another control decided this.
         render(control, makeContext({ value: "Set elsewhere" }));
 
-        expect(control.getOutputs()).toEqual({ field: "Set elsewhere" });
+        expect(control.getOutputs().field).toBe("Set elsewhere");
         expect(field().value).toBe("Set elsewhere");
     });
 
@@ -350,7 +368,7 @@ describe("MentionControl adapter", () => {
         type("ABC");
         render(control, makeContext({ value: "A" }));
 
-        expect(control.getOutputs()).toEqual({ field: "ABC" });
+        expect(control.getOutputs().field).toBe("ABC");
         expect(field().value).toBe("ABC");
         expect(notifyCount).toBe(2);
     });
@@ -428,7 +446,7 @@ describe("MentionControl adapter", () => {
         // the field as being edited.
         focusField();
         type("AB");
-        expect(control.getOutputs()).toEqual({ field: "AB" });
+        expect(control.getOutputs().field).toBe("AB");
 
         // An external decision arrives mid-edit. The adapter accepts it, but the
         // editor must not pull it out from under the caret.
@@ -441,13 +459,13 @@ describe("MentionControl adapter", () => {
         render(control, makeContext({ value: "Set elsewhere" }));
 
         expect(field().value).toBe("ABX");
-        expect(control.getOutputs()).toEqual({ field: "ABX" });
+        expect(control.getOutputs().field).toBe("ABX");
 
         // The host catches up with the value actually typed.
         render(control, makeContext({ value: "ABX" }));
 
         expect(field().value).toBe("ABX");
-        expect(control.getOutputs()).toEqual({ field: "ABX" });
+        expect(control.getOutputs().field).toBe("ABX");
     });
 
     it("can be destroyed after initialization", () => {

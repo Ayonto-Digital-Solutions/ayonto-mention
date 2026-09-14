@@ -77,7 +77,7 @@ function props(over: Partial<MentionEditorProps> = {}): MentionEditorProps {
         disabled: false,
         label: "Comment",
         userSearchProvider: { search: () => Promise.resolve({ users: [], hasMore: false }) },
-        onChange: (next: string) => changes.push(next),
+        onLocalEdit: (state) => changes.push(state.text),
         ...over,
     };
 }

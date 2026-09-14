@@ -24,6 +24,15 @@
     <property name="recordId" display-name-key="RecordId_Display_Key" description-key="RecordId_Desc_Key" of-type="SingleLine.Text" usage="input" required="true" />
     <property name="recordTable" display-name-key="RecordTable_Display_Key" description-key="RecordTable_Desc_Key" of-type="SingleLine.Text" usage="input" required="true" />
 
+    <!-- The companion column that carries the mentions of the current editing
+         session out with the record. It is written together with the text, in the
+         same save, and a server-side step turns it into notifications once the
+         record is actually committed. One companion column per mention-enabled
+         text column: two editors on one form would otherwise overwrite each
+         other's value, because a column has exactly one value and each control
+         writes its own. Configure it hidden; it is not for people to read. -->
+    <property name="mentionMetadata" display-name-key="MentionMetadata_Display_Key" description-key="MentionMetadata_Desc_Key" of-type="Multiple" usage="bound" required="true" />
+
     <resources>
       <code path="index.ts" order="1"/>
       <platform-library name="React" version="16.14.0" />
