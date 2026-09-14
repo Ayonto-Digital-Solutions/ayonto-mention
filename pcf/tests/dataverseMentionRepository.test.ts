@@ -1,6 +1,9 @@
 import { DataverseMentionRepository } from "../src/services/dataverseMentionRepository";
 import { MentionRepositoryError } from "../src/domain/mentionPersistence";
-import type { CreateMentionRequest, PersistedMention } from "../src/domain/mentionPersistence";
+import type {
+    CreateMentionRequest,
+    MentionRepository,
+} from "../src/domain/mentionPersistence";
 import type { MentionRecordContext } from "../src/domain/recordContext";
 
 /** A normalized context, as resolveRecordContext would produce it. */
@@ -26,16 +29,15 @@ interface Harness {
     readonly queries: readonly RecordedQuery[];
 }
 
-/** A Web API that answers each retrieve with the next scripted page. */
-function makeWebApi(
-    pages: readonly { entities: Record<string, unknown>[]; nextLink?: string }[] = [
-        { entities: [] },
-    ],
-    createdId = "AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB"
-): Harness {
+/**
+ * A Web API that records what it is asked.
+ *
+ * It can answer a retrieve, and nothing in this repository ever sends one — the
+ * recorded queries are what proves that.
+ */
+function makeWebApi(createdId = "AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB"): Harness {
     const creates: RecordedCreate[] = [];
     const queries: RecordedQuery[] = [];
-    let page = 0;
 
     return {
         creates,
@@ -47,12 +49,7 @@ function makeWebApi(
             }),
             retrieveMultipleRecords: jest.fn((entity: string, options?: string) => {
                 queries.push({ entity, options: options ?? "" });
-                const current = pages[Math.min(page, pages.length - 1)];
-                page += 1;
-                return Promise.resolve({
-                    entities: current?.entities ?? [],
-                    nextLink: current?.nextLink ?? "",
-                });
+                return Promise.resolve({ entities: [], nextLink: "" });
             }),
         } as unknown as ComponentFramework.WebApi,
     };
@@ -70,23 +67,6 @@ function request(over: Partial<CreateMentionRequest["recipient"]> = {}): CreateM
     };
 }
 
-/** A stored row, with every value fictional. */
-const row = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
-    ayonto_mentionid: "0a0a0a0a-1111-2222-3333-444444444444",
-    ayonto_recipientuserid: "99999999-8888-7777-6666-555555555555",
-    ayonto_recipientname: "Alex Rivera",
-    ayonto_recipientemail: "alex.rivera@example.invalid",
-    ...over,
-});
-
-const firstQuery = (harness: Harness): RecordedQuery => {
-    const query = harness.queries[0];
-    if (query === undefined) {
-        throw new Error("expected at least one query");
-    }
-    return query;
-};
-
 const firstCreate = (harness: Harness): RecordedCreate => {
     const create = harness.creates[0];
     if (create === undefined) {
@@ -94,9 +74,6 @@ const firstCreate = (harness: Harness): RecordedCreate => {
     }
     return create;
 };
-
-const ids = (mentions: readonly PersistedMention[]): readonly string[] =>
-    mentions.map((mention) => mention.recipient.userId);
 
 describe("DataverseMentionRepository.create", () => {
     it("writes to the mention table", async () => {
@@ -189,7 +166,7 @@ describe("DataverseMentionRepository.create", () => {
     });
 
     it("normalizes the id the platform hands back", async () => {
-        const harness = makeWebApi([{ entities: [] }], "{AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB}");
+        const harness = makeWebApi("{AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB}");
 
         const created = await new DataverseMentionRepository(harness.webAPI).create(request());
 
@@ -237,327 +214,14 @@ describe("DataverseMentionRepository.create", () => {
             .catch((error: unknown) => error);
 
         expect(failure).toBeInstanceOf(MentionRepositoryError);
-        expect((failure as MentionRepositoryError).operation).toBe("write");
-        expect((failure as Error).message).not.toContain(detail);
-        expect((failure as Error).message).not.toContain("example.invalid");
-    });
-});
-
-describe("DataverseMentionRepository.list", () => {
-    it("reads from the mention table", async () => {
-        const harness = makeWebApi();
-        await new DataverseMentionRepository(harness.webAPI).list(context);
-
-        expect(firstQuery(harness).entity).toBe("ayonto_mention");
-    });
-
-    it("scopes the query to the record's table", async () => {
-        const harness = makeWebApi();
-        await new DataverseMentionRepository(harness.webAPI).list(context);
-
-        expect(firstQuery(harness).options).toContain("ayonto_recordtable eq 'account'");
-    });
-
-    it("scopes the query to the record", async () => {
-        const harness = makeWebApi();
-        await new DataverseMentionRepository(harness.webAPI).list(context);
-
-        expect(firstQuery(harness).options).toContain(
-            "ayonto_recordid eq '11111111-2222-3333-4444-555555555555'"
-        );
-    });
-
-    it("scopes the query to the field the mention was written in", async () => {
-        // Without this, two mention-enabled columns on one record would read each
-        // other's mentions.
-        const harness = makeWebApi();
-        await new DataverseMentionRepository(harness.webAPI).list(context);
-
-        expect(firstQuery(harness).options).toContain("ayonto_sourcefield eq 'description'");
-    });
-
-    it("escapes an apostrophe so the OData literal stays intact", async () => {
-        const harness = makeWebApi();
-        await new DataverseMentionRepository(harness.webAPI).list({
-            ...context,
-            sourceField: "o'brien",
-        });
-
-        expect(firstQuery(harness).options).toContain("ayonto_sourcefield eq 'o''brien'");
-    });
-
-    it("encodes a value that would otherwise cut the query string in half", async () => {
-        const harness = makeWebApi();
-        await new DataverseMentionRepository(harness.webAPI).list({
-            ...context,
-            recordTable: "a&b?c",
-        });
-
-        expect(firstQuery(harness).options).toContain("ayonto_recordtable eq 'a%26b%3Fc'");
-    });
-
-    it("asks only for the columns it needs", async () => {
-        const harness = makeWebApi();
-        await new DataverseMentionRepository(harness.webAPI).list(context);
-
-        expect(firstQuery(harness).options).toContain(
-            "$select=ayonto_mentionid,ayonto_recipientuserid,ayonto_recipientname,ayonto_recipientemail"
-        );
-    });
-
-    it("parses a stored mention", async () => {
-        const harness = makeWebApi([{ entities: [row()] }]);
-
-        const mentions = await new DataverseMentionRepository(harness.webAPI).list(context);
-
-        expect(mentions).toEqual([
-            {
-                id: "0a0a0a0a-1111-2222-3333-444444444444",
-                recipient: {
-                    userId: "99999999-8888-7777-6666-555555555555",
-                    name: "Alex Rivera",
-                    email: "alex.rivera@example.invalid",
-                },
-            },
-        ]);
-    });
-
-    it("normalizes stored ids", async () => {
-        const harness = makeWebApi([
-            {
-                entities: [
-                    row({
-                        ayonto_mentionid: "{0A0A0A0A-1111-2222-3333-444444444444}",
-                        ayonto_recipientuserid: "{99999999-8888-7777-6666-555555555555}",
-                    }),
-                ],
-            },
-        ]);
-
-        const mentions = await new DataverseMentionRepository(harness.webAPI).list(context);
-
-        expect(mentions[0]?.id).toBe("0a0a0a0a-1111-2222-3333-444444444444");
-        expect(mentions[0]?.recipient.userId).toBe("99999999-8888-7777-6666-555555555555");
-    });
-
-    it("reports a missing email as absent rather than empty", async () => {
-        const harness = makeWebApi([{ entities: [row({ ayonto_recipientemail: null })] }]);
-
-        const mentions = await new DataverseMentionRepository(harness.webAPI).list(context);
-
-        expect(mentions[0]?.recipient).not.toHaveProperty("email");
-    });
-
-    it("skips rows that cannot speak for a person", async () => {
-        const harness = makeWebApi([
-            {
-                entities: [
-                    row({ ayonto_mentionid: null }),
-                    row({ ayonto_recipientuserid: "" }),
-                    row({ ayonto_recipientname: "   " }),
-                    row(),
-                ],
-            },
-        ]);
-
-        const mentions = await new DataverseMentionRepository(harness.webAPI).list(context);
-
-        expect(mentions).toHaveLength(1);
-    });
-
-    it("skips rows whose recipient columns are empty rather than blank", async () => {
-        // A host reports an unset column as null, not as an empty string.
-        const harness = makeWebApi([
-            {
-                entities: [
-                    row({ ayonto_recipientuserid: null }),
-                    row({ ayonto_recipientname: null }),
-                    row(),
-                ],
-            },
-        ]);
-
-        const mentions = await new DataverseMentionRepository(harness.webAPI).list(context);
-
-        expect(mentions).toHaveLength(1);
-    });
-
-    it("copes with a response that carries no paging link at all", async () => {
-        const queries: RecordedQuery[] = [];
-        const webAPI = {
-            retrieveMultipleRecords: jest.fn((entity: string, options?: string) => {
-                queries.push({ entity, options: options ?? "" });
-                // No nextLink property, as a host may answer.
-                return Promise.resolve({ entities: [row()] });
-            }),
-        } as unknown as ComponentFramework.WebApi;
-
-        const mentions = await new DataverseMentionRepository(webAPI).list(context);
-
-        expect(queries).toHaveLength(1);
-        expect(mentions).toHaveLength(1);
-    });
-
-    it("skips a row whose mention id is not a string", async () => {
-        const harness = makeWebApi([{ entities: [row({ ayonto_mentionid: 123 })] }]);
-
-        await expect(
-            new DataverseMentionRepository(harness.webAPI).list(context)
-        ).resolves.toEqual([]);
-    });
-
-    it("skips a row whose recipient id is not a string", async () => {
-        const harness = makeWebApi([
-            {
-                entities: [
-                    row({ ayonto_recipientuserid: 42 }),
-                    row({ ayonto_mentionid: "obj", ayonto_recipientuserid: { id: "nested" } }),
-                ],
-            },
-        ]);
-
-        await expect(
-            new DataverseMentionRepository(harness.webAPI).list(context)
-        ).resolves.toEqual([]);
-    });
-
-    it("skips a row whose recipient name is not a string", async () => {
-        // A schema mismatch must cost one row, not throw out of the repository.
-        const harness = makeWebApi([{ entities: [row({ ayonto_recipientname: 123 })] }]);
-
-        await expect(
-            new DataverseMentionRepository(harness.webAPI).list(context)
-        ).resolves.toEqual([]);
-    });
-
-    it("keeps a row whose email is not a string, without the email", async () => {
-        const harness = makeWebApi([{ entities: [row({ ayonto_recipientemail: 1234 })] }]);
-
-        const mentions = await new DataverseMentionRepository(harness.webAPI).list(context);
-
-        expect(mentions).toHaveLength(1);
-        expect(mentions[0]?.recipient).not.toHaveProperty("email");
-        expect(mentions[0]?.recipient.name).toBe("Alex Rivera");
-    });
-
-    it("skips entries that are not rows at all", async () => {
-        const harness = makeWebApi([
-            { entities: [null, undefined, 7, "text", [] as unknown] as Record<string, unknown>[] },
-        ]);
-
-        await expect(
-            new DataverseMentionRepository(harness.webAPI).list(context)
-        ).resolves.toEqual([]);
-    });
-
-    it("returns the valid rows that follow a malformed one on the same page", async () => {
-        const harness = makeWebApi([
-            {
-                entities: [
-                    row({ ayonto_mentionid: "bad", ayonto_recipientname: 123 }),
-                    row({ ayonto_mentionid: "good-1" }),
-                    row({ ayonto_mentionid: "good-2" }),
-                ],
-            },
-        ]);
-
-        const mentions = await new DataverseMentionRepository(harness.webAPI).list(context);
-
-        expect(mentions.map((mention) => mention.id)).toEqual(["good-1", "good-2"]);
-    });
-
-    it("keeps two people who share a display name apart", async () => {
-        const harness = makeWebApi([
-            {
-                entities: [
-                    row({ ayonto_mentionid: "1a", ayonto_recipientuserid: "id-a", ayonto_recipientname: "Robin Fox" }),
-                    row({ ayonto_mentionid: "1b", ayonto_recipientuserid: "id-b", ayonto_recipientname: "Robin Fox" }),
-                ],
-            },
-        ]);
-
-        const mentions = await new DataverseMentionRepository(harness.webAPI).list(context);
-
-        expect(ids(mentions)).toEqual(["id-a", "id-b"]);
-    });
-
-    it("keeps repeated mentions of the same person", async () => {
-        const harness = makeWebApi([
-            {
-                entities: [
-                    row({ ayonto_mentionid: "2a" }),
-                    row({ ayonto_mentionid: "2b" }),
-                ],
-            },
-        ]);
-
-        const mentions = await new DataverseMentionRepository(harness.webAPI).list(context);
-
-        expect(mentions.map((mention) => mention.id)).toEqual(["2a", "2b"]);
-        expect(new Set(ids(mentions)).size).toBe(1);
-    });
-
-    it("follows the paging link and combines the pages", async () => {
-        const harness = makeWebApi([
-            {
-                entities: [row({ ayonto_mentionid: "page1" })],
-                nextLink: "example.invalid/api/data/v9.2/ayonto_mention?$skiptoken=abc",
-            },
-            { entities: [row({ ayonto_mentionid: "page2" })] },
-        ]);
-
-        const mentions = await new DataverseMentionRepository(harness.webAPI).list(context);
-
-        expect(mentions.map((mention) => mention.id)).toEqual(["page1", "page2"]);
-        expect(harness.queries).toHaveLength(2);
-        expect(harness.queries[1]?.options).toBe("?$skiptoken=abc");
-    });
-
-    it("cannot be made to loop by a repeated paging link", async () => {
-        // A host that keeps handing back the same link would otherwise spin here
-        // forever.
-        // Scheme-free on purpose: a literal endpoint URL trips the power-apps
-        // "use-relative-uri" rule, and the scheme is irrelevant here.
-        const repeated = "example.invalid/api/data/v9.2/ayonto_mention?$skiptoken=same";
-        const harness = makeWebApi([
-            { entities: [row({ ayonto_mentionid: "first" })], nextLink: repeated },
-            { entities: [row({ ayonto_mentionid: "second" })], nextLink: repeated },
-        ]);
-
-        const mentions = await new DataverseMentionRepository(harness.webAPI).list(context);
-
-        expect(harness.queries).toHaveLength(2);
-        expect(mentions.map((mention) => mention.id)).toEqual(["first", "second"]);
-    });
-
-    it("stops at a paging link that carries no query", async () => {
-        const harness = makeWebApi([
-            { entities: [row()], nextLink: "example.invalid/no-query" },
-        ]);
-
-        const mentions = await new DataverseMentionRepository(harness.webAPI).list(context);
-
-        expect(harness.queries).toHaveLength(1);
-        expect(mentions).toHaveLength(1);
-    });
-
-    it("turns a read failure into a neutral error", async () => {
-        const detail = "Access denied at org-a1b2c3.example.invalid";
-        const webAPI = {
-            retrieveMultipleRecords: jest.fn(() => Promise.reject(new Error(detail))),
-        } as unknown as ComponentFramework.WebApi;
-
-        const failure = await new DataverseMentionRepository(webAPI)
-            .list(context)
-            .catch((error: unknown) => error);
-
-        expect(failure).toBeInstanceOf(MentionRepositoryError);
-        expect((failure as MentionRepositoryError).operation).toBe("read");
+        expect((failure as Error).message).toBe("The mention could not be saved.");
         expect((failure as Error).message).not.toContain(detail);
         expect((failure as Error).message).not.toContain("example.invalid");
     });
 
-    it("does not log the failure", async () => {
+    it("does not log the failure either", async () => {
+        // A Dataverse error can carry the environment URL and schema names with
+        // it, so it is neither surfaced nor written anywhere.
         const errors: unknown[][] = [];
         const warnings: unknown[][] = [];
         const errorSpy = jest.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
@@ -569,10 +233,10 @@ describe("DataverseMentionRepository.list", () => {
 
         try {
             const webAPI = {
-                retrieveMultipleRecords: jest.fn(() => Promise.reject(new Error("Access denied"))),
+                createRecord: jest.fn(() => Promise.reject(new Error("Access denied"))),
             } as unknown as ComponentFramework.WebApi;
 
-            await new DataverseMentionRepository(webAPI).list(context).catch(() => undefined);
+            await new DataverseMentionRepository(webAPI).create(request()).catch(() => undefined);
 
             expect(errors).toEqual([]);
             expect(warnings).toEqual([]);
@@ -580,5 +244,29 @@ describe("DataverseMentionRepository.list", () => {
             errorSpy.mockRestore();
             warnSpy.mockRestore();
         }
+    });
+});
+
+describe("the v1 persistence contract", () => {
+    /**
+     * Compile-time proof that the contract is write-only: every member of
+     * `MentionRepository` must appear here, so adding a read back to the
+     * interface stops the build until that decision is made deliberately.
+     */
+    const CONTRACT: Record<keyof MentionRepository, true> = { create: true };
+
+    it("offers writing as its only persistence entry point", () => {
+        expect(Object.keys(CONTRACT)).toEqual(["create"]);
+    });
+
+    it("never asks the mention table anything", async () => {
+        const harness = makeWebApi();
+
+        await new DataverseMentionRepository(harness.webAPI).create(request());
+
+        // Reading the rows back cannot reconstruct current mention state, so v1
+        // does not read them at all. User search has its own service and is not
+        // affected.
+        expect(harness.queries).toEqual([]);
     });
 });
