@@ -606,6 +606,107 @@ describe("MentionControl host reconciliation", () => {
     });
 });
 
+describe("MentionControl output pairs", () => {
+    it("does not let a stale companion echo roll the payload back, however often it repeats", () => {
+        const M0 = '{"schemaVersion":1,"sourceField":"description","mentions":[]}';
+        const { control, editor } = start({ value: "A", metadata: M0 });
+
+        edit(editor, "A@Alex Rivera ", [{ ...alex, start: 1 }]);
+        const t1 = control.getOutputs().field ?? "";
+        const m1 = control.getOutputs().mentionMetadata ?? "";
+        expect(m1).not.toBe(M0);
+
+        // The host repeats the new text beside the payload from before it. Half
+        // an output is no news, however many times it arrives.
+        for (let report = 0; report < 3; report += 1) {
+            render(control, makeContext({ value: t1, metadata: M0 }));
+            expect(control.getOutputs().field).toBe(t1);
+            expect(control.getOutputs().mentionMetadata).toBe(m1);
+        }
+
+        // The whole output, at last.
+        render(control, makeContext({ value: t1, metadata: m1 }));
+        expect(control.getOutputs().mentionMetadata).toBe(m1);
+
+        // The cycle is closed, so the host is authoritative again.
+        render(control, makeContext({ value: t1, metadata: M0 }));
+        expect(control.getOutputs().mentionMetadata).toBe(M0);
+    });
+
+    it("keeps a payload the editor produced by adopting a host value", () => {
+        const { control, editor } = start({ value: "" });
+        edit(editor, "@Alex Rivera ", [alex]);
+        const m1 = control.getOutputs().mentionMetadata ?? "";
+
+        // A text decided elsewhere, reported with the session's own payload.
+        render(control, makeContext({ value: "decided elsewhere", metadata: m1 }));
+        // The editor adopts it and the mention is gone with it.
+        editor.onHostValueAdopted?.({ text: "decided elsewhere", mentions: [] });
+        const empty = control.getOutputs().mentionMetadata ?? "";
+        expect(JSON.parse(empty)).toMatchObject({ mentions: [] });
+
+        // The host has not written the new payload back yet, and says so twice.
+        render(control, makeContext({ value: "decided elsewhere", metadata: m1 }));
+        render(control, makeContext({ value: "decided elsewhere", metadata: m1 }));
+        expect(control.getOutputs().mentionMetadata).toBe(empty);
+
+        // The whole output closes the cycle.
+        render(control, makeContext({ value: "decided elsewhere", metadata: empty }));
+        expect(control.getOutputs().mentionMetadata).toBe(empty);
+        render(control, makeContext({ value: "decided elsewhere", metadata: m1 }));
+        expect(control.getOutputs().mentionMetadata).toBe(m1);
+    });
+
+    it("acknowledges an edit that put the text back where the cycle started", () => {
+        const { control, editor } = start({ value: "A", metadata: "" });
+        edit(editor, "A@Alex Rivera ", [{ ...alex, start: 1 }]);
+        // Back to the text the cycle started from, but nobody is mentioned now.
+        edit(editor, "A", []);
+        const m2 = control.getOutputs().mentionMetadata ?? "";
+        expect(m2).not.toBe("");
+
+        // The baseline text with the baseline payload: one half is stale.
+        render(control, makeContext({ value: "A", metadata: "" }));
+        expect(control.getOutputs().mentionMetadata).toBe(m2);
+
+        // The whole output, which happens to carry the baseline text.
+        render(control, makeContext({ value: "A", metadata: m2 }));
+        expect(control.getOutputs().mentionMetadata).toBe(m2);
+
+        // Closed: the host decides again.
+        render(control, makeContext({ value: "A", metadata: "" }));
+        expect(control.getOutputs().mentionMetadata).toBe("");
+    });
+
+    it("ignores an earlier output whatever payload it arrives with", () => {
+        const { control, editor } = start({ value: "A", metadata: "" });
+        edit(editor, "T1", [alex]);
+        const m1 = control.getOutputs().mentionMetadata ?? "";
+        edit(editor, "T2", [dana]);
+        const m2 = control.getOutputs().mentionMetadata ?? "";
+
+        render(control, makeContext({ value: "T1", metadata: m1 }));
+        expect(control.getOutputs().field).toBe("T2");
+        expect(control.getOutputs().mentionMetadata).toBe(m2);
+
+        render(control, makeContext({ value: "T1", metadata: "" }));
+        expect(control.getOutputs().field).toBe("T2");
+        expect(control.getOutputs().mentionMetadata).toBe(m2);
+    });
+
+    it("still lets a genuinely external text decide both halves", () => {
+        const external = '{"schemaVersion":1,"sourceField":"description","mentions":[]}';
+        const { control, editor } = start({ value: "A", metadata: "" });
+        edit(editor, "T1", [alex]);
+        edit(editor, "T2", [dana]);
+
+        render(control, makeContext({ value: "decided elsewhere", metadata: external }));
+
+        expect(control.getOutputs().field).toBe("decided elsewhere");
+        expect(control.getOutputs().mentionMetadata).toBe(external);
+    });
+});
+
 describe("MentionControl instances on one form", () => {
     it("keep their own payloads", () => {
         const first = start({ logicalName: "description" });
@@ -643,13 +744,40 @@ describe("MentionControl when the companion column may not be written", () => {
         expect(container.querySelectorAll('[role="option"]')).toHaveLength(0);
     });
 
-    it("leaves the payload exactly as the host holds it", () => {
-        const stored = '{"schemaVersion":1,"sourceField":"description","mentions":[]}';
-        const { control } = start({ metadata: stored, metadataEditable: false });
+    it("leaves a stored payload exactly as it is, mentions and all", async () => {
+        // Non-empty on purpose: an empty one would look the same as whatever a
+        // fresh session would write, and hide an overwrite completely.
+        const stored =
+            '{"schemaVersion":1,"sourceField":"description","mentions":' +
+            '[{"eventId":"event-old","recipientUserId":"u-old","recipientName":"Alex Rivera"}]}';
+        const host = makeHost();
+        const { control } = start({
+            webApi: host.webAPI,
+            metadata: stored,
+            metadataEditable: false,
+        });
 
         type("plain text is still allowed");
+        advance(MENTION_SEARCH_DEBOUNCE_MS);
+        await flush();
 
         expect(control.getOutputs().field).toBe("plain text is still allowed");
+        expect(control.getOutputs().mentionMetadata).toBe(stored);
+        // Nobody was looked up, and no notification of this session exists.
+        expect(host.searches).toEqual([]);
+        expect(host.writes).toEqual([]);
+    });
+
+    it("keeps the stored payload even when a mention is reported to it", () => {
+        const stored =
+            '{"schemaVersion":1,"sourceField":"description","mentions":' +
+            '[{"eventId":"event-old","recipientUserId":"u-old","recipientName":"Alex Rivera"}]}';
+        const { control, editor } = start({ metadata: stored, metadataEditable: false });
+
+        // Even if a mention reached the adapter, nothing about it is recorded.
+        edit(editor, "@Alex Rivera ", [alex]);
+
+        expect(control.getOutputs().field).toBe("@Alex Rivera ");
         expect(control.getOutputs().mentionMetadata).toBe(stored);
     });
 

@@ -274,7 +274,11 @@ describe("MentionControl adapter", () => {
     it("accepts a previously used value again once the edit was acknowledged", () => {
         const { control } = start({ value: "A" });
         type("AB");
-        render(control, makeContext({ value: "AB" }));
+        // A real acknowledgement reports the whole output back, both columns.
+        render(
+            control,
+            makeContext({ value: "AB", metadata: control.getOutputs().mentionMetadata ?? "" })
+        );
 
         // "A" was the value before the edit, but nothing is outstanding any more,
         // so this is the host deciding, not an echo.
@@ -313,7 +317,10 @@ describe("MentionControl adapter", () => {
         const { control } = start({ value: "A" });
         type("AB");
         type("ABC");
-        render(control, makeContext({ value: "ABC" }));
+        render(
+            control,
+            makeContext({ value: "ABC", metadata: control.getOutputs().mentionMetadata ?? "" })
+        );
 
         // The cycle is closed, so "AB" is the host deciding, not a late echo.
         render(control, makeContext({ value: "AB" }));

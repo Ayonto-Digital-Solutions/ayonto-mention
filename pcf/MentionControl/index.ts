@@ -6,6 +6,7 @@ import type { MentionEditorState } from "../src/components/MentionEditor";
 import { DataverseUserSearchService } from "../src/services/dataverseUserSearchService";
 import { createEventId } from "../src/services/eventId";
 import { MentionEpisodeTracker } from "../src/domain/mentionEpisodes";
+import type { MentionOccurrence } from "../src/domain/mentionLifecycle";
 import { serializeMentionMetadata } from "../src/domain/mentionMetadata";
 import { resolveRecordContext, sameRecordContext } from "../src/domain/recordContext";
 import type { MentionRecordContext } from "../src/domain/recordContext";
@@ -13,6 +14,17 @@ import type { UserSearchProvider } from "../src/domain/userSearch";
 
 /** Accessible name used when the host supplies no column label. */
 const FALLBACK_LABEL = "Ayonto Mention";
+
+/**
+ * One output of this control: the text and the mentions made in it, which are
+ * two halves of a single editor state and are reconciled as one.
+ */
+interface OutputPair {
+    readonly field: string;
+    readonly metadata: string;
+}
+
+const EMPTY_PAIR: OutputPair = { field: "", metadata: "" };
 
 /**
  * Gives every control instance its own ARIA ids, so two editors on one form
@@ -41,39 +53,38 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
     private userSearch: UserSearchProvider;
     private readonly listboxId: string;
 
-    /** What the editor shows, and what `getOutputs` reports for the text column. */
-    private value = "";
     /**
-     * The host value that opened the current reconciliation cycle: the last one
-     * this control actually accepted. It is the baseline a cycle is measured
-     * against and is deliberately **not** touched by local edits, nor by a host
-     * value that was classified as stale — a stale update must never become the
-     * new baseline merely because `updateView` happened to see it.
+     * What `getOutputs` reports: the text and the payload that belongs to it.
+     *
+     * Until this session changes the mentions, the payload is whatever the host
+     * holds: a record is opened, not rewritten, and emitting an empty payload on
+     * every form load would make the form dirty for nothing. From the first
+     * change on, it is this session's own — including an empty set, which says
+     * that the session now means to notify nobody.
      */
-    private lastAcceptedHostValue = "";
+    private current: OutputPair = EMPTY_PAIR;
+    /**
+     * The pair that opened the current reconciliation cycle: the last one this
+     * control actually accepted. It is the baseline a cycle is measured against
+     * and is deliberately **not** touched by local edits, nor by a host report
+     * that was classified as stale — a stale update must never become the new
+     * baseline merely because `updateView` happened to see it.
+     */
+    private accepted: OutputPair = EMPTY_PAIR;
     /**
      * The most recent local output awaiting acknowledgement, or null when no
      * cycle is open.
      */
-    private pendingOutput: string | null = null;
+    private pending: OutputPair | null = null;
     /**
-     * Every local output emitted during the current cycle, the newest included.
-     * The host may report any of them late, and each such report is an echo of a
-     * value the user has already moved past.
-     */
-    private readonly emittedOutputsInCycle = new Set<string>();
-    /**
-     * The companion payload, exactly as `getOutputs` reports it.
+     * Every text this control emitted during the current cycle, the newest
+     * included. The host may report any of them late, and each such report is an
+     * echo of a value the user has already moved past.
      *
-     * Until this session changes the mentions, it is whatever the host holds:
-     * a record is opened, not rewritten, and emitting an empty payload on every
-     * form load would make the form dirty for nothing. From the first change on,
-     * it is this session's own — including an empty set, which says that the
-     * session now means to notify nobody.
+     * Texts, not pairs: the lineage answers one question — did this field value
+     * come from us during this cycle — and the payload has no say in it.
      */
-    private metadata = "";
-    /** The companion value this control last accepted from the host. */
-    private lastAcceptedHostMetadata = "";
+    private readonly emittedFieldsInCycle = new Set<string>();
     /**
      * The record a mention would be written against, or null while there is
      * none. Re-resolved on every `updateView`, never frozen at init: on a form
@@ -130,117 +141,144 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
         // API. It looks up people; nothing else here reads or writes Dataverse.
         this.userSearch = new DataverseUserSearchService(context.webAPI);
 
-        this.acceptHostValue(
-            context.parameters.field.raw ?? "",
-            context.parameters.mentionMetadata.raw ?? ""
-        );
+        this.acceptPair({
+            field: context.parameters.field.raw ?? "",
+            metadata: context.parameters.mentionMetadata.raw ?? "",
+        });
     }
 
     /**
-     * Takes a host value as the truth and closes any cycle that was open: it
-     * becomes the new baseline, nothing is outstanding, and the outputs emitted
-     * during the closed cycle are forgotten. Past this point the host may
-     * legitimately set one of those values again.
-     *
-     * The companion payload travels with it. It is taken as a value to report
-     * back unchanged, never read: what a stored payload says about who was
-     * mentioned belongs to the session that wrote it, and reading identity out
-     * of it would be the cross-session guessing this control does not do.
+     * Takes a pair as the truth and closes any cycle that was open: it becomes
+     * the new baseline, nothing is outstanding, and the texts emitted during the
+     * closed cycle are forgotten. Past this point the host may legitimately set
+     * one of those values again.
      */
-    private acceptHostValue(hostValue: string, hostMetadata: string): void {
-        this.value = hostValue;
-        this.lastAcceptedHostValue = hostValue;
-        this.metadata = hostMetadata;
-        this.lastAcceptedHostMetadata = hostMetadata;
-        this.pendingOutput = null;
-        this.emittedOutputsInCycle.clear();
+    private acceptPair(pair: OutputPair): void {
+        this.current = pair;
+        this.accepted = pair;
+        this.pending = null;
+        this.emittedFieldsInCycle.clear();
     }
 
     /**
-     * Reconciles a value pushed by the host against the local outputs that may
-     * not have been acknowledged yet.
+     * Hands one output to the framework and keeps it outstanding until the host
+     * reports exactly it back.
+     */
+    private emit(pair: OutputPair): void {
+        this.current = pair;
+        this.pending = pair;
+        // The lineage grows; the cycle's baseline deliberately does not move.
+        this.emittedFieldsInCycle.add(pair.field);
+        this.notifyOutputChanged();
+    }
+
+    /**
+     * Reconciles what the host reports against the output that may not have been
+     * acknowledged yet.
      *
      * The framework does not tell a control whether an `updateView` carries the
      * result of its own last output or a value decided elsewhere, and it may
      * report any earlier value for a render or two after `notifyOutputChanged`.
-     * A reconciliation *cycle* therefore runs from the last host value this
-     * control accepted until one of its own outputs is acknowledged or the host
-     * decides something of its own. Four cases are told apart, in this order and
-     * with no timers involved:
+     * It may also report the two halves of one output at different times: the
+     * text of the newest one beside the payload of the one before it. A
+     * reconciliation *cycle* therefore runs from the last pair this control
+     * accepted until one of its own outputs is acknowledged **whole**, or the
+     * host decides a text of its own. Five cases, in this order and with no
+     * timers involved:
      *
-     * 1. **Acknowledgement of the current output** — checked first, and first on
-     *    purpose: after editing "A" to "AB" and back to "A", a host reporting "A"
-     *    acknowledges the current output rather than echoing the value the cycle
-     *    started from.
-     * 2. **Stale pre-edit echo** — the baseline the cycle started from. The user
-     *    has moved past it.
-     * 3. **Stale earlier-output echo** — any output emitted earlier in this
-     *    cycle. Typing "A" to "AB" to "ABC" leaves the host free to report "AB"
-     *    late, and taking it would drag the text back a keystroke.
-     * 4. **A genuinely external value** — anything else. It wins, even over an
+     * 1. **Acknowledgement of the current output** — both halves match what is
+     *    outstanding. The only thing that closes a cycle from the control's own
+     *    side. Checked first, and first on purpose: an edit may legitimately
+     *    return the text to the value the cycle started from while changing the
+     *    payload, and that is an acknowledgement, not an echo.
+     * 2. **An incomplete echo of the current text** — the right text with a
+     *    payload that is not the one that belongs to it. The host is repeating
+     *    one half of what it was given, and half an output is no news. It is
+     *    dropped whole, and the cycle stays open however often it repeats: a
+     *    payload the user has moved past must never come back because the text
+     *    beside it happened to be current.
+     * 3. **Stale pre-edit echo** — the text the cycle started from. The user has
+     *    moved past it.
+     * 4. **Stale earlier-output echo** — a text emitted earlier in this cycle.
+     *    Typing "A" to "AB" to "ABC" leaves the host free to report "AB" late,
+     *    and taking it would drag the text back a keystroke.
+     * 5. **A genuinely external text** — anything else. It wins, even over an
      *    outstanding edit, because a business rule or another control may have
-     *    set it deliberately, and it closes the cycle.
+     *    set it deliberately, and it closes the cycle. Both halves come with it.
      *
-     * The text decides all four. The companion payload is written only by this
-     * control, so a host report of it carries no decision of its own: it is
-     * adopted exactly when the text it arrived with is, and ignored exactly when
-     * that text is. An echo of the payload can therefore never roll back a newer
-     * local one.
+     * The text decides all five. That rests on an assumption this architecture
+     * makes explicit: **the companion column belongs to this control.** Nothing
+     * else writes it, so a payload arriving on its own carries no decision, and
+     * while an output is outstanding only a genuinely different text can
+     * override the local state. What a stored payload says about who was
+     * mentioned is never read: identity belongs to the session that wrote it.
      *
      * One ambiguity cannot be resolved without guessing: an external system may
-     * deliberately choose a value identical to an earlier local output while a
+     * deliberately choose a text identical to an earlier local output while a
      * newer one is still pending. Inside an open cycle that reading loses to
-     * case 3, because silently dragging the text back a keystroke under the
+     * case 4, because silently dragging the text back a keystroke under the
      * user's hands is the worse failure. Once the cycle closes, the same value
      * is accepted normally.
      */
-    private reconcile(hostValue: string, hostMetadata: string): void {
-        if (this.pendingOutput === null) {
+    private reconcile(host: OutputPair): void {
+        const pending = this.pending;
+        if (pending === null) {
             // No cycle open: the host is authoritative.
-            this.acceptHostValue(hostValue, hostMetadata);
+            this.acceptPair(host);
             return;
         }
 
-        if (hostValue === this.pendingOutput) {
-            // 1: acknowledgement of the current output. What comes back with it
-            // is this control's own payload, so accepting it changes nothing.
-            this.acceptHostValue(hostValue, this.metadata);
+        if (host.field === pending.field && host.metadata === pending.metadata) {
+            // 1: the whole output came back.
+            this.acceptPair(pending);
             return;
         }
 
-        if (hostValue === this.lastAcceptedHostValue) {
-            // 2: the value this cycle started from.
+        if (host.field === pending.field) {
+            // 2: one half of it came back.
             return;
         }
 
-        if (this.emittedOutputsInCycle.has(hostValue)) {
-            // 3: an output from earlier in this cycle.
+        if (host.field === this.accepted.field) {
+            // 3: the text this cycle started from.
             return;
         }
 
-        // 4: a genuinely external value closes the cycle.
-        this.acceptHostValue(hostValue, hostMetadata);
+        if (this.emittedFieldsInCycle.has(host.field)) {
+            // 4: a text from earlier in this cycle.
+            return;
+        }
+
+        // 5: a genuinely external text closes the cycle.
+        this.acceptPair(host);
+    }
+
+    /**
+     * The payload for a set of mentions, or the one already held when this
+     * control may not write the companion column at all.
+     *
+     * Where the host refuses the companion value, deriving one would replace
+     * what is stored there with this session's own — and this session was never
+     * allowed to make a mention in the first place. The episode tracker is left
+     * untouched for the same reason: nothing happened that it should record.
+     */
+    private deriveMetadata(mentions: readonly MentionOccurrence[]): string {
+        return this.mentionsAllowed
+            ? serializeMentionMetadata(this.sourceField, this.episodes.update(mentions))
+            : this.current.metadata;
     }
 
     /**
      * Takes one local edit: the text the user produced and the mentions standing
      * in it, as one state.
      *
-     * Both outputs are settled here before the framework is told anything, so a
+     * Both halves are settled here before the framework is told anything, so a
      * `getOutputs` answered at that instant describes one moment of the editor
      * and not two. The framework is told exactly once per edit, and `updateView`
      * never calls it.
      */
     private readonly handleLocalEdit = (state: MentionEditorState): void => {
-        this.value = state.text;
-        this.pendingOutput = state.text;
-        // The lineage grows; the cycle's baseline deliberately does not move.
-        this.emittedOutputsInCycle.add(state.text);
-        this.metadata = serializeMentionMetadata(
-            this.sourceField,
-            this.episodes.update(state.mentions)
-        );
-        this.notifyOutputChanged();
+        this.emit({ field: state.text, metadata: this.deriveMetadata(state.mentions) });
     };
 
     /**
@@ -250,18 +288,16 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
      * but a host value can take a mention out from under the editor, and then
      * the payload no longer describes the text it will be saved with. Saying so
      * is not a text change, and the framework is only told when the payload
-     * actually moved.
+     * actually moved. It is an output like any other: it stays outstanding until
+     * the host reports it back, or the host would hand the old payload straight
+     * back on its next update.
      */
     private readonly handleHostValueAdopted = (state: MentionEditorState): void => {
-        const next = serializeMentionMetadata(
-            this.sourceField,
-            this.episodes.update(state.mentions)
-        );
-        if (next === this.metadata) {
+        const metadata = this.deriveMetadata(state.mentions);
+        if (metadata === this.current.metadata) {
             return;
         }
-        this.metadata = next;
-        this.notifyOutputChanged();
+        this.emit({ field: this.current.field, metadata });
     };
 
     /**
@@ -299,8 +335,10 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
     public updateView(context: ComponentFramework.Context<IInputs>): React.ReactElement {
         const field = context.parameters.field;
         const metadata = context.parameters.mentionMetadata;
-        const hostValue = field.raw ?? "";
-        const hostMetadata = metadata.raw ?? "";
+        const host: OutputPair = {
+            field: field.raw ?? "",
+            metadata: metadata.raw ?? "",
+        };
 
         // The column the payload names comes from the bound field's own metadata,
         // which the framework documents and types, so the maker does not have to
@@ -327,9 +365,9 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
             // pending output, emitted lineage and baseline all belong to a record
             // that is no longer open. The payload of the record now open comes
             // with it, and this session has made no mentions on it yet.
-            this.acceptHostValue(hostValue, hostMetadata);
+            this.acceptPair(host);
         } else {
-            this.reconcile(hostValue, hostMetadata);
+            this.reconcile(host);
         }
 
         // A column the user may not write to is read-only even when the form as a
@@ -345,7 +383,7 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
             // Changing on a record boundary, so React remounts the editor and its
             // mention identities start empty for the new record.
             key: `mention-editor-${this.editorGeneration.toString()}`,
-            value: this.value,
+            value: this.current.field,
             disabled,
             canMention: this.mentionsAllowed,
             maxLength: field.attributes?.MaxLength,
@@ -364,7 +402,7 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
      * same local edit, before the framework is ever told there is something new.
      */
     public getOutputs(): IOutputs {
-        return { field: this.value, mentionMetadata: this.metadata };
+        return { field: this.current.field, mentionMetadata: this.current.metadata };
     }
 
     /**
