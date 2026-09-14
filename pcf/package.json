@@ -12,8 +12,8 @@
   "scripts": {
     "build": "pcf-scripts build",
     "clean": "pcf-scripts clean",
-    "lint": "pcf-scripts lint && eslint tests jest.config.js",
-    "lint:fix": "pcf-scripts lint fix && eslint --fix tests jest.config.js",
+    "lint": "pcf-scripts lint && eslint src tests jest.config.js",
+    "lint:fix": "pcf-scripts lint fix && eslint --fix src tests jest.config.js",
     "typecheck": "tsc --noEmit",
     "test": "jest",
     "test:coverage": "jest --coverage",

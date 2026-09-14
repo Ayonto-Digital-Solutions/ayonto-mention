@@ -150,8 +150,6 @@ export class MentionGracePeriod {
         }
 
         await new Promise<void>((resolve, reject) => {
-            let handle: ReturnType<typeof setTimeout> | undefined;
-
             const fire = (): void => {
                 // Harmless whether the timer already fired or not, and whether
                 // the entry is still there or not.
@@ -180,18 +178,32 @@ export class MentionGracePeriod {
                             this.delivered.add(key);
                         }
                         resolve();
+                        // Nothing is passed on: the chain ends here and the outer
+                        // promise is settled through `resolve()`. The explicit value
+                        // is what `promise/always-return` asks a then() callback for.
+                        return undefined;
                     },
                     (error: unknown) => {
                         // Not reached, so the recipient stays eligible for another
                         // attempt. The failure is passed on untouched and never
                         // logged: it is the caller's to describe.
                         this.delivering.delete(key);
+                        // The rule wants a rejection reason that is provably an
+                        // Error. Honouring it here would mean wrapping or
+                        // replacing what the delivery threw, and the contract is
+                        // that the caller receives the original failure with its
+                        // own type and stack. The reason is only ever whatever
+                        // onReady rejected with, so the suppression is local to
+                        // this one hand-over.
+                        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
                         reject(error);
                     }
                 );
             };
 
-            handle = setTimeout(fire, this.delayMs);
+            // Declared after `fire` on purpose: `fire` only reads the handle when it
+            // runs, and by then the timer has been handed over.
+            const handle = setTimeout(fire, this.delayMs);
             this.waiting.set(key, { fire });
         });
     }
