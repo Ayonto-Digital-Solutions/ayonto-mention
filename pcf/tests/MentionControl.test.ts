@@ -549,14 +549,22 @@ describe("MentionControl record context", () => {
         expect(notifyCount).toBe(0);
     });
 
-    it("does not call the Web API merely to resolve a record context", () => {
+    it("reads the stored mentions of each record it resolves, and looks nobody up", () => {
         const recorded: RecordedCall[] = [];
         const { control } = start({ recordId: GUID, webApi: makeWebApi(recorded) });
 
+        // Another table is another scope, so its own stored mentions are read.
         render(control, makeContext({ recordId: GUID, recordTable: "contact" }));
         advance();
 
         expect(recordContextOf(control)).not.toBeNull();
-        expect(recorded).toEqual([]);
+        // Only the mention table: nobody has typed an "@", so there is nobody to
+        // look up, and resolving a record context still costs no user query.
+        expect(recorded.map((call) => call.entity)).toEqual([
+            "ayonto_mention",
+            "ayonto_mention",
+        ]);
+        expect(recorded[0]?.options).toContain("ayonto_recordtable eq 'account'");
+        expect(recorded[1]?.options).toContain("ayonto_recordtable eq 'contact'");
     });
 });

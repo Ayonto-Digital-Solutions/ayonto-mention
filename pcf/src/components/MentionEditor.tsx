@@ -4,8 +4,10 @@ import { MessageBar, MessageBarBody, Spinner, Textarea, makeStyles, tokens } fro
 import { SuggestionList } from "./SuggestionList";
 import { applyMention, findMentionTrigger, reanchorMentions } from "../domain/mentionText";
 import type { InsertedMention, MentionTrigger } from "../domain/mentionText";
+import { hydrateOccurrences, resolvePersistedIdentities } from "../domain/mentionHydration";
 import { sameMentionOccurrences } from "../domain/mentionLifecycle";
 import type { MentionOccurrence } from "../domain/mentionLifecycle";
+import type { MentionRecipient } from "../domain/mentionPersistence";
 import type { UserSearchProvider, UserSuggestion } from "../domain/userSearch";
 import { useMentionSearch } from "../hooks/useMentionSearch";
 
@@ -60,6 +62,15 @@ export interface MentionEditorProps {
     readonly onWrittenMentionsChange?:
         | ((mentions: readonly MentionOccurrence[]) => void)
         | undefined;
+    /**
+     * The people this field's mentions were written for before, as they were
+     * stored. Platform-neutral on purpose: the editor is handed them and never
+     * reads anything itself.
+     *
+     * They restore identity, never text. A name among them that the text does
+     * not already carry as a mention stays unmentioned.
+     */
+    readonly persistedRecipients?: readonly MentionRecipient[] | undefined;
 }
 
 const useStyles = makeStyles({
@@ -88,6 +99,9 @@ const useStyles = makeStyles({
 });
 
 const DEFAULT_LISTBOX_ID = "ayonto-mention-suggestions";
+
+/** One shared empty list, so "none given" keeps the same identity every render. */
+const NO_RECIPIENTS: readonly MentionRecipient[] = [];
 
 /**
  * A mention this editor wrote, plus what the suggestion that created it carried.
@@ -209,6 +223,48 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
         onWrittenMentionsChangeRef.current?.(snapshot.map(copyOccurrence));
     }, [toOccurrence]);
 
+    /**
+     * The display names the stored rows can safely be taken to mean, and the one
+     * person each of them means. Rebuilt only when the stored rows themselves
+     * change, which is once per record: they arrive from a single read.
+     */
+    const identities = React.useMemo(
+        () => resolvePersistedIdentities(props.persistedRecipients ?? NO_RECIPIENTS),
+        [props.persistedRecipients]
+    );
+    const identitiesRef = React.useRef(identities);
+    identitiesRef.current = identities;
+
+    /**
+     * Gives the mentions standing in `nextText` the people they were written for,
+     * where that is known and where this session does not already know better.
+     *
+     * Only the tracked identities change; the text is not touched, so nothing is
+     * emitted to the host, no suggestion is reported as picked and nothing is
+     * scheduled for writing. A stored mention is already stored.
+     */
+    const hydrateTracked = React.useCallback((nextText: string) => {
+        insertedMentions.current = hydrateOccurrences(
+            nextText,
+            identitiesRef.current,
+            insertedMentions.current
+        );
+    }, []);
+
+    /**
+     * Stored identities arrive after the field is already on screen, so they are
+     * applied when they land — once, against the text as it stands then.
+     *
+     * Deliberately not repeated after every local edit. A mention the user
+     * deleted and later typed out by hand is a name in a sentence, not a mention
+     * of whoever used to be named there, and re-running this would hand it that
+     * person's identity behind the user's back.
+     */
+    React.useEffect(() => {
+        hydrateTracked(textRef.current);
+        reportWrittenMentions();
+    }, [hydrateTracked, identities, reportWrittenMentions]);
+
     // A disabled field offers nobody, and a query is only ever what the caret is on.
     const query = props.disabled ? null : (trigger?.query ?? null);
     const search = useMentionSearch(query, userSearchProvider);
@@ -231,12 +287,17 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
         (next: string) => {
             setText(next);
             reanchor(next);
+            // The host decided this text, so a mention in it may well be one that
+            // was written and stored on an earlier visit. Identities already
+            // loaded are applied as part of taking the value over — which is what
+            // separates this from a local edit, where a typed name is nobody.
+            hydrateTracked(next);
             // A host value can take a mention out from under the editor.
             reportWrittenMentions();
             emittedValues.current = new Set<string>([next]);
             pendingHostValue.current = null;
         },
-        [reanchor, reportWrittenMentions]
+        [hydrateTracked, reanchor, reportWrittenMentions]
     );
 
     /**

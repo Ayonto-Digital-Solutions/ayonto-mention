@@ -218,6 +218,64 @@ export function reanchorMentions<T extends InsertedMention>(
     return anchored;
 }
 
+/** Something that can stand in the text as "@name". */
+export interface NamedMentionCandidate {
+    readonly name: string;
+}
+
+/** Where one of the offered candidates stands in the text as a mention. */
+export interface KnownMentionMatch<T extends NamedMentionCandidate> {
+    /** Index of the "@" that starts the mention. */
+    readonly start: number;
+    readonly candidate: T;
+}
+
+/**
+ * Scans the text for the places where one of the offered candidates stands in it
+ * as a mention.
+ *
+ * This is the one place the rules for what reads as a mention live, so a caller
+ * that resolves persisted identities and one that renders mentions cannot drift
+ * apart. An "@" only counts at the start of the text or after whitespace or an
+ * opening bracket, which is what keeps an e-mail address out; the name has to be
+ * followed by a character a mention may end on, so "@Dana" is not found inside
+ * "@Dana Winter"; and the longest candidate wins, so the same text is not read as
+ * a mention of the shorter namesake. Matches never overlap: scanning carries on
+ * behind the one just found.
+ *
+ * The candidate travels with the match rather than just its name, so a caller
+ * never has to look the name up again afterwards.
+ */
+export function findKnownMentions<T extends NamedMentionCandidate>(
+    text: string,
+    candidates: readonly T[]
+): KnownMentionMatch<T>[] {
+    const longestFirst = [...candidates].sort(
+        (left, right) => right.name.length - left.name.length
+    );
+    const matches: KnownMentionMatch<T>[] = [];
+
+    for (let at = text.indexOf("@"); at !== -1; at = text.indexOf("@", at + 1)) {
+        const previous = at > 0 ? text[at - 1] : undefined;
+        if (previous !== undefined && !MENTION_BOUNDARY.test(previous)) {
+            continue;
+        }
+
+        const candidate = longestFirst.find((offered) =>
+            readsAsMention(text, at, offered.name)
+        );
+        if (candidate === undefined) {
+            continue;
+        }
+
+        matches.push({ start: at, candidate });
+        // Carry on behind the mention: what it covers is spoken for.
+        at += candidate.name.length;
+    }
+
+    return matches;
+}
+
 /** A run of text, and the user it mentions when it is one. */
 export interface MentionSegment {
     readonly text: string;
@@ -243,45 +301,25 @@ export function splitMentions(
     users: ReadonlyMap<string, string>,
     written: readonly InsertedMention[] = []
 ): MentionSegment[] {
-    if ((users.size === 0 && written.length === 0) || text.length === 0) {
-        return text.length > 0 ? [{ text }] : [];
-    }
-
-    const names = [
-        ...new Set([...users.keys(), ...written.map((mention) => mention.name)]),
-    ].sort((left, right) => right.length - left.length);
+    const names = [...new Set([...users.keys(), ...written.map((mention) => mention.name)])];
     const segments: MentionSegment[] = [];
     let plainFrom = 0;
 
-    for (let at = text.indexOf("@"); at !== -1; at = text.indexOf("@", at + 1)) {
-        const previous = at > 0 ? text[at - 1] : undefined;
-        if (previous !== undefined && !MENTION_BOUNDARY.test(previous)) {
-            continue;
-        }
-
-        const name = names.find((candidate) => {
-            if (!text.startsWith(`@${candidate}`, at)) {
-                return false;
-            }
-            const following = text[at + candidate.length + 1];
-            return following === undefined || MENTION_END.test(following);
-        });
-        if (name === undefined) {
-            continue;
-        }
-
-        if (at > plainFrom) {
-            segments.push({ text: text.slice(plainFrom, at) });
+    for (const match of findKnownMentions(text, names.map((name) => ({ name })))) {
+        const { name } = match.candidate;
+        if (match.start > plainFrom) {
+            segments.push({ text: text.slice(plainFrom, match.start) });
         }
         // A mention written here beats the name: it knows which of two namesakes
         // was picked.
-        const here = written.find((mention) => mention.start === at && mention.name === name);
+        const here = written.find(
+            (mention) => mention.start === match.start && mention.name === name
+        );
         segments.push({
             text: `@${name}`,
             userId: here?.userId ?? users.get(name),
         });
-        plainFrom = at + name.length + 1;
-        at = plainFrom - 1;
+        plainFrom = match.start + name.length + 1;
     }
 
     if (plainFrom < text.length) {

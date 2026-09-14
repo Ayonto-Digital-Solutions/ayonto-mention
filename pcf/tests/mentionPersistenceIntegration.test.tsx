@@ -30,6 +30,22 @@ interface CreateCall {
 
 interface ReadCall {
     readonly entity: string;
+    readonly options: string;
+}
+
+/** A stored mention row, in the table's own column names. */
+function toMentionRow(person: {
+    readonly userId: string;
+    readonly name: string;
+    readonly email?: string;
+    readonly id?: string;
+}): Record<string, unknown> {
+    return {
+        ayonto_mentionid: person.id ?? `row-${person.userId}`,
+        ayonto_recipientuserid: person.userId,
+        ayonto_recipientname: person.name,
+        ayonto_recipientemail: person.email ?? null,
+    };
 }
 
 interface Host {
@@ -43,6 +59,12 @@ interface Host {
     holdNextCreate(): void;
     releaseCreate(): void;
     failNextCreate(reason: Error): void;
+    /** What a read of the mention table finds from now on. */
+    storeMentions(rows: readonly Record<string, unknown>[]): void;
+    /** Holds the next mention-table read open until released. */
+    holdNextRead(): void;
+    releaseRead(rows: readonly Record<string, unknown>[]): void;
+    failNextRead(): void;
 }
 
 function makeHost(): Host {
@@ -53,6 +75,12 @@ function makeHost(): Host {
     let holdCreate = false;
     let releaseHeld: (() => void) | undefined;
     let createFailure: Error | null = null;
+    let stored: readonly Record<string, unknown>[] = [];
+    let holdRead = false;
+    let readFailure = false;
+    let settleRead:
+        | ((outcome: { rows: readonly Record<string, unknown>[] } | "fail") => void)
+        | undefined;
 
     const webAPI = {
         createRecord: jest.fn((entity: string, data: Record<string, unknown>) => {
@@ -77,8 +105,24 @@ function makeHost(): Host {
                 searches.push(options ?? "");
                 return new Promise((resolve) => searchResolvers.push(resolve));
             }
-            reads.push({ entity });
-            return Promise.resolve({ entities: [], nextLink: "" });
+            reads.push({ entity, options: options ?? "" });
+            if (readFailure) {
+                readFailure = false;
+                return Promise.reject(new Error("read refused"));
+            }
+            if (holdRead) {
+                holdRead = false;
+                return new Promise((resolve, reject) => {
+                    settleRead = (outcome) => {
+                        if (outcome === "fail") {
+                            reject(new Error("read refused"));
+                            return;
+                        }
+                        resolve({ entities: outcome.rows, nextLink: "" });
+                    };
+                });
+            }
+            return Promise.resolve({ entities: stored, nextLink: "" });
         }),
     } as unknown as ComponentFramework.WebApi;
 
@@ -100,6 +144,19 @@ function makeHost(): Host {
         },
         failNextCreate: (reason) => {
             createFailure = reason;
+        },
+        storeMentions: (rows) => {
+            stored = rows;
+        },
+        holdNextRead: () => {
+            holdRead = true;
+        },
+        releaseRead: (rows) => {
+            settleRead?.({ rows });
+            settleRead = undefined;
+        },
+        failNextRead: () => {
+            readFailure = true;
         },
     };
 }
@@ -177,6 +234,32 @@ function render(
         throw new Error("updateView returned nothing");
     }
     return element.props as MentionEditorProps;
+}
+
+/**
+ * Renders like `render`, and also records every set the real editor reports.
+ *
+ * The adapter's own callback still runs: what is observed is exactly what it is
+ * told, and nothing about the control changes for being watched.
+ */
+function renderObserving(
+    control: MentionControl,
+    context: ComponentFramework.Context<IInputs>,
+    reported: (readonly MentionOccurrence[])[]
+): void {
+    act(() => {
+        const element = control.updateView(context);
+        const adapters = element.props as MentionEditorProps;
+        ReactDOM.render(
+            React.cloneElement(element, {
+                onWrittenMentionsChange: (mentions: readonly MentionOccurrence[]) => {
+                    reported.push(mentions);
+                    adapters.onWrittenMentionsChange?.(mentions);
+                },
+            } as Partial<MentionEditorProps>),
+            container
+        );
+    });
 }
 
 function renderKey(
@@ -609,14 +692,16 @@ describe("MentionControl failure and lifecycle", () => {
         expect(host.creates).toEqual([]);
     });
 
-    it("never reads the mention table", async () => {
+    it("reads the mention table once for the record, and reading writes nothing", async () => {
         const host = makeHost();
         const { editor } = start({ webApi: host.webAPI });
         editor.onWrittenMentionsChange?.([alex]);
         editor.onMentionSelected?.(alex);
         await passGracePeriod();
 
-        expect(host.reads).toEqual([]);
+        // One read, for the record that was opened. The row that follows is the
+        // newly picked mention, never an echo of what the read brought back.
+        expect(host.reads.map((read) => read.entity)).toEqual(["ayonto_mention"]);
         expect(host.creates).toHaveLength(1);
     });
 });
@@ -734,5 +819,172 @@ describe("MentionControl reconciliation across record boundaries", () => {
         await flush();
         expect(host.creates).toHaveLength(1);
         expect(host.creates[0]?.data.ayonto_recordid).toBe(RECORD_A);
+    });
+});
+
+describe("MentionControl hydration of stored mentions", () => {
+    it("reads the stored mentions of exactly this record, table and column", () => {
+        const host = makeHost();
+        start({ webApi: host.webAPI, recordId: RECORD_A, logicalName: "ayonto_notes" });
+
+        expect(host.reads).toHaveLength(1);
+        const options = host.reads[0]?.options ?? "";
+        expect(options).toContain("ayonto_recordtable eq 'account'");
+        expect(options).toContain(`ayonto_recordid eq '${RECORD_A}'`);
+        expect(options).toContain("ayonto_sourcefield eq 'ayonto_notes'");
+    });
+
+    it("reads once, however often the same record is rendered", () => {
+        const host = makeHost();
+        const { control } = start({ webApi: host.webAPI, recordId: RECORD_A });
+
+        render(control, makeContext({ webApi: host.webAPI, recordId: RECORD_A }));
+        render(control, makeContext({ webApi: host.webAPI, recordId: RECORD_A, value: "typing" }));
+
+        expect(host.reads).toHaveLength(1);
+    });
+
+    it("reads nothing while the record has no id", () => {
+        const host = makeHost();
+        start({ webApi: host.webAPI, recordId: "" });
+
+        expect(host.reads).toEqual([]);
+    });
+
+    it("reads the stored mentions once the record is saved, without remounting", () => {
+        const host = makeHost();
+        const { control } = start({ webApi: host.webAPI, recordId: "" });
+        const before = renderKey(control, makeContext({ webApi: host.webAPI, recordId: "" }));
+        expect(host.reads).toEqual([]);
+
+        const after = renderKey(control, makeContext({ webApi: host.webAPI, recordId: RECORD_A }));
+
+        expect(host.reads).toHaveLength(1);
+        // The same editing session, so the identities picked while unsaved stand.
+        expect(after).toBe(before);
+    });
+
+    it("reads the new record's stored mentions when the form moves on", () => {
+        const host = makeHost();
+        const { control } = start({ webApi: host.webAPI, recordId: RECORD_A });
+
+        render(control, makeContext({ webApi: host.webAPI, recordId: RECORD_B }));
+
+        expect(host.reads).toHaveLength(2);
+        expect(host.reads[1]?.options).toContain(`ayonto_recordid eq '${RECORD_B}'`);
+    });
+
+    it("gives the mention in the host's text the person it was written for", async () => {
+        const host = makeHost();
+        host.storeMentions([
+            toMentionRow({
+                userId: "u-alex",
+                name: "Alex Rivera",
+                email: "alex.rivera@example.invalid",
+            }),
+        ]);
+        const reported: (readonly MentionOccurrence[])[] = [];
+        const control = new MentionControl();
+        const context = makeContext({
+            webApi: host.webAPI,
+            recordId: RECORD_A,
+            value: "Hi @Alex Rivera, thanks",
+        });
+        control.init(
+            context,
+            () => {
+                notifyCount += 1;
+            },
+            {}
+        );
+
+        renderObserving(control, context, reported);
+        expect(reported).toEqual([]);
+        await flush();
+
+        // The real editor, the real repository, the real Web API call.
+        expect(field().value).toBe("Hi @Alex Rivera, thanks");
+        expect(reported).toEqual([
+            [
+                {
+                    start: 3,
+                    name: "Alex Rivera",
+                    userId: "u-alex",
+                    email: "alex.rivera@example.invalid",
+                },
+            ],
+        ]);
+        // Nothing about the field's value changed, so the framework is told
+        // nothing, and a mention that is already stored is not stored again.
+        expect(notifyCount).toBe(0);
+        await passGracePeriod();
+        advance(MENTION_GRACE_PERIOD_MS * 4);
+        await flush();
+        expect(host.creates).toEqual([]);
+        expect(notifyCount).toBe(0);
+    });
+
+    it("writes no row for a mention it only loaded, however long it waits", async () => {
+        const host = makeHost();
+        host.storeMentions([toMentionRow({ userId: "u-dana", name: "Dana Winter" })]);
+        start({ webApi: host.webAPI, recordId: RECORD_A, value: "@Dana Winter " });
+        await flush();
+
+        await passGracePeriod();
+        advance(MENTION_GRACE_PERIOD_MS * 10);
+        await flush();
+
+        expect(host.creates).toEqual([]);
+    });
+
+    it("still writes a mention the user picks after the stored ones arrive", async () => {
+        const host = makeHost();
+        host.storeMentions([toMentionRow({ userId: "u-dana", name: "Dana Winter" })]);
+        const { editor } = start({ webApi: host.webAPI, recordId: RECORD_A, value: "@Dana Winter " });
+        await flush();
+
+        const picked: MentionOccurrence = { start: 13, name: "Alex Rivera", userId: "u-alex" };
+        editor.onWrittenMentionsChange?.([
+            { start: 0, name: "Dana Winter", userId: "u-dana" },
+            picked,
+        ]);
+        editor.onMentionSelected?.(picked);
+        await passGracePeriod();
+
+        expect(host.creates).toHaveLength(1);
+        expect(host.creates[0]?.data).toMatchObject({ ayonto_recipientuserid: "u-alex" });
+    });
+
+    it("infers nobody for a name two people were stored under", async () => {
+        const host = makeHost();
+        host.storeMentions([
+            toMentionRow({ userId: "id-a", name: "Robin Fox", id: "row-a" }),
+            toMentionRow({ userId: "id-b", name: "Robin Fox", id: "row-b" }),
+        ]);
+        const reported: (readonly MentionOccurrence[])[] = [];
+        const control = new MentionControl();
+        const context = makeContext({
+            webApi: host.webAPI,
+            recordId: RECORD_A,
+            value: "Hello @Robin Fox",
+        });
+        control.init(context, () => undefined, {});
+
+        renderObserving(control, context, reported);
+        await flush();
+
+        expect(reported).toEqual([]);
+    });
+
+    it("keeps the field usable when the stored mentions cannot be read", async () => {
+        const host = makeHost();
+        host.failNextRead();
+        start({ webApi: host.webAPI, recordId: RECORD_A, value: "@Dana Winter " });
+        await flush();
+
+        type("@Dana Winter and more");
+
+        expect(field().value).toBe("@Dana Winter and more");
+        expect(host.creates).toEqual([]);
     });
 });

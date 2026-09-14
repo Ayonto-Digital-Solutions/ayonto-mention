@@ -1,7 +1,7 @@
 import * as React from "react";
 
 import { IInputs, IOutputs } from "./generated/ManifestTypes";
-import { MentionEditor } from "../src/components/MentionEditor";
+import { HydratedMentionEditor } from "../src/components/HydratedMentionEditor";
 import { DataverseUserSearchService } from "../src/services/dataverseUserSearchService";
 import { DataverseMentionRepository } from "../src/services/dataverseMentionRepository";
 import { MentionGracePeriod } from "../src/services/mentionGracePeriod";
@@ -354,9 +354,10 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
         const disabled = context.mode.isControlDisabled || field.security?.editable === false;
         const hostLabel = context.mode.label;
 
-        return React.createElement(MentionEditor, {
+        return React.createElement(HydratedMentionEditor, {
             // Changing on a record boundary, so React remounts the editor and its
-            // mention identities start empty for the new record.
+            // mention identities start empty for the new record — the stored ones
+            // it had loaded included.
             key: `mention-editor-${this.editorGeneration.toString()}`,
             value: this.value,
             disabled,
@@ -367,6 +368,12 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
             onChange: this.handleChange,
             onMentionSelected: this.handleMentionSelected,
             onWrittenMentionsChange: this.handleWrittenMentionsChange,
+            // Reading what was mentioned here before is React's to do, not this
+            // adapter's: an answer that arrives later is a state update, and
+            // announcing an output change to force a re-render would tell the
+            // framework something happened to the field's value that did not.
+            repository: this.repository,
+            recordContext: this.recordContext,
         });
     }
 
