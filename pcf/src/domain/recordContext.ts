@@ -53,6 +53,29 @@ function normalizeLogicalName(value: string): string {
 }
 
 /**
+ * True when two contexts point at the same record, table and column.
+ *
+ * Compared by value, never by reference: `resolveRecordContext` builds a new
+ * object on every host update, so two identical contexts are never the same
+ * object, and a reference check would read every render as a record change.
+ * Both sides are already normalized, so the fields compare directly.
+ */
+export function sameRecordContext(
+    left: MentionRecordContext | null,
+    right: MentionRecordContext | null
+): boolean {
+    if (left === null || right === null) {
+        return left === right;
+    }
+
+    return (
+        left.recordId === right.recordId &&
+        left.recordTable === right.recordTable &&
+        left.sourceField === right.sourceField
+    );
+}
+
+/**
  * Normalizes a host-supplied record context.
  *
  * Returns `null` when the record cannot be written against yet — most commonly

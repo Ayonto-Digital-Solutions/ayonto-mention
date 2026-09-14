@@ -3,8 +3,12 @@ import * as React from "react";
 import { IInputs, IOutputs } from "./generated/ManifestTypes";
 import { MentionEditor } from "../src/components/MentionEditor";
 import { DataverseUserSearchService } from "../src/services/dataverseUserSearchService";
-import { resolveRecordContext } from "../src/domain/recordContext";
+import { DataverseMentionRepository } from "../src/services/dataverseMentionRepository";
+import { MentionGracePeriod } from "../src/services/mentionGracePeriod";
+import { resolveRecordContext, sameRecordContext } from "../src/domain/recordContext";
 import type { MentionRecordContext } from "../src/domain/recordContext";
+import type { MentionOccurrence } from "../src/domain/mentionLifecycle";
+import type { MentionRepository } from "../src/domain/mentionPersistence";
 import type { UserSearchProvider } from "../src/domain/userSearch";
 
 /** Accessible name used when the host supplies no column label. */
@@ -62,6 +66,26 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
      * directly, so it stays private and the class exposes no accessor for it.
      */
     private recordContext: MentionRecordContext | null = null;
+    /** Writes the mention rows. Held behind the contract, not the Dataverse class. */
+    private repository: MentionRepository;
+    /**
+     * The grace period for the record currently being edited, or null while the
+     * record cannot be written against. Replaced, never reused, when the editor
+     * moves to another record.
+     */
+    private grace: MentionGracePeriod | null = null;
+    /** The mentions standing in the text, as the editor last reported them. */
+    private writtenMentions: readonly MentionOccurrence[] = [];
+    /**
+     * Bumped when the editor moves to a different record, so React remounts it.
+     *
+     * The editor tracks which person each written mention means, and that cannot
+     * be recovered from the text — "@Robin Fox" alone never says which Robin Fox.
+     * Carrying it across records would attach one record's identities to another,
+     * so the boundary is a remount rather than a reset method added to the editor
+     * for the adapter's benefit.
+     */
+    private editorGeneration = 0;
 
     constructor() {
         instanceCount += 1;
@@ -82,6 +106,7 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
         this.notifyOutputChanged = notifyOutputChanged;
         // One service per control instance, over the framework's supported Web API.
         this.userSearch = new DataverseUserSearchService(context.webAPI);
+        this.repository = new DataverseMentionRepository(context.webAPI);
 
         this.acceptHostValue(context.parameters.field.raw ?? "");
     }
@@ -171,6 +196,125 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
     };
 
     /**
+     * Moves the editor to the record the host now reports, and says whether that
+     * crossed a real record boundary.
+     *
+     * Going from "no id yet" to a real id is **not** a boundary: that is the same
+     * editing session finally becoming persistable, and the mentions already
+     * selected in it must survive to be written. Anything else — another record,
+     * another table, another column, or losing the context entirely — is a
+     * boundary, and nothing from the old scope may follow.
+     *
+     * The answer is returned rather than recomputed by the caller, so the rule
+     * for what counts as a boundary lives in exactly one place.
+     */
+    private applyRecordContext(next: MentionRecordContext | null): boolean {
+        const previous = this.recordContext;
+        this.recordContext = next;
+
+        const crossedBoundary = previous !== null && !sameRecordContext(previous, next);
+        if (crossedBoundary) {
+            this.closePersistence();
+            this.editorGeneration += 1;
+        }
+
+        if (next !== null && this.grace === null) {
+            this.startPersistence(next);
+        }
+
+        return crossedBoundary;
+    }
+
+    /**
+     * Opens a persistence scope for one record.
+     *
+     * The context is copied into the scope and every write from this scheduler
+     * uses that copy. Reading `this.recordContext` when the timer fires five
+     * seconds later would write the mention against whichever record the form had
+     * moved to by then.
+     */
+    private startPersistence(scope: MentionRecordContext): void {
+        const captured: MentionRecordContext = {
+            recordId: scope.recordId,
+            recordTable: scope.recordTable,
+            sourceField: scope.sourceField,
+        };
+
+        const grace = new MentionGracePeriod(async (mention: MentionOccurrence) => {
+            await this.repository.create({
+                context: captured,
+                recipient:
+                    mention.email === undefined
+                        ? { userId: mention.userId, name: mention.name }
+                        : { userId: mention.userId, name: mention.name, email: mention.email },
+            });
+        });
+        this.grace = grace;
+
+        // Mentions picked before the record had an id are now persistable, and
+        // each gets the full grace period from this moment. Ones removed in the
+        // meantime are not in the snapshot and are never written.
+        grace.updateWritten(this.writtenMentions);
+        for (const mention of this.writtenMentions) {
+            this.consumeScheduleResult(grace.schedule(mention));
+        }
+    }
+
+    /** Keeps the editor's view of the text and the grace period in step. */
+    private readonly handleWrittenMentionsChange = (
+        mentions: readonly MentionOccurrence[]
+    ): void => {
+        this.writtenMentions = mentions;
+        this.grace?.updateWritten(mentions);
+    };
+
+    /**
+     * Starts the grace period for a mention that was just written.
+     *
+     * Nothing is written to Dataverse here, and the delay is never bypassed. With
+     * no persistable record there is nothing to schedule against; the editor keeps
+     * the identity, and the mention is scheduled once the record gets its id.
+     */
+    private readonly handleMentionSelected = (mention: MentionOccurrence): void => {
+        const grace = this.grace;
+        if (grace === null) {
+            return;
+        }
+        this.consumeScheduleResult(grace.schedule(mention));
+    };
+
+    /**
+     * Takes the result of a detached schedule.
+     *
+     * A rejection here is already a neutral MentionRepositoryError, and there is
+     * nowhere to show it yet: telling the user that a mention could not be saved
+     * is a separate step. Until then the rejection is consumed so it cannot become
+     * an unhandled rejection, and deliberately not logged — a Dataverse failure
+     * can carry the environment URL and schema names with it. This is a temporary
+     * boundary, not an intention to ignore persistence failures.
+     */
+    private consumeScheduleResult(pending: Promise<void>): void {
+        void pending.catch(() => undefined);
+    }
+
+    /**
+     * Ends the current persistence scope.
+     *
+     * Cancelling is done by reporting an empty set, which is exactly what the
+     * grace period treats as a withdrawal: anything still waiting is dropped
+     * rather than flushed onto a record it was never meant for.
+     *
+     * There may be no scope at all — a record that never received an id never
+     * opened one, so a form abandoned before its first save has nothing to tear
+     * down.
+     */
+    private closePersistence(): void {
+        this.grace?.updateWritten([]);
+        this.grace = null;
+        this.writtenMentions = [];
+    }
+
+    /**
      * Called whenever a value in the property bag changes.
      * @param context Property bag provided by the framework.
      * @returns The root React element for the control.
@@ -178,16 +322,32 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
     public updateView(context: ComponentFramework.Context<IInputs>): React.ReactElement {
         const field = context.parameters.field;
         const hostValue = field.raw ?? "";
-        this.reconcile(hostValue);
 
-        // The column name comes from the bound field's own metadata, which the
-        // framework documents and types, so the maker does not have to configure
-        // it and no host internals are touched to discover it.
-        this.recordContext = resolveRecordContext({
-            recordId: context.parameters.recordId.raw,
-            recordTable: context.parameters.recordTable.raw,
-            sourceField: field.attributes?.LogicalName,
-        });
+        // Which record this is gets settled first, because it decides how the
+        // value is to be read. The column name comes from the bound field's own
+        // metadata, which the framework documents and types, so the maker does
+        // not have to configure it and no host internals are touched.
+        const crossedBoundary = this.applyRecordContext(
+            resolveRecordContext({
+                recordId: context.parameters.recordId.raw,
+                recordTable: context.parameters.recordTable.raw,
+                sourceField: field.attributes?.LogicalName,
+            })
+        );
+
+        if (crossedBoundary) {
+            // A different record's value is simply the truth, and it has to be
+            // taken as such before anything compares it to the record just left.
+            // Judged against the old lineage it could look like a stale echo of
+            // that record's baseline, or of something it emitted, and this
+            // control would carry the previous record's text into this one.
+            // Accepting it also ends the old reconciliation cycle outright:
+            // pending output, emitted lineage and baseline all belong to a record
+            // that is no longer open.
+            this.acceptHostValue(hostValue);
+        } else {
+            this.reconcile(hostValue);
+        }
 
         // A column the user may not write to is read-only even when the form as a
         // whole is editable.
@@ -195,6 +355,9 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
         const hostLabel = context.mode.label;
 
         return React.createElement(MentionEditor, {
+            // Changing on a record boundary, so React remounts the editor and its
+            // mention identities start empty for the new record.
+            key: `mention-editor-${this.editorGeneration.toString()}`,
             value: this.value,
             disabled,
             maxLength: field.attributes?.MaxLength,
@@ -202,6 +365,8 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
             listboxId: this.listboxId,
             userSearchProvider: this.userSearch,
             onChange: this.handleChange,
+            onMentionSelected: this.handleMentionSelected,
+            onWrittenMentionsChange: this.handleWrittenMentionsChange,
         });
     }
 
@@ -216,7 +381,13 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
      * Called when the control is removed from the DOM tree.
      */
     public destroy(): void {
-        // The React tree is owned by the framework, and the lookup holds no
-        // listeners or timers of its own.
+        // Anything still inside its grace period is cancelled, not flushed. The
+        // framework does not say whether the form was saved or discarded, and
+        // flushing would turn a mention the user removed by navigating away into
+        // a notification that cannot be taken back.
+        //
+        // A write already in flight cannot be recalled and finishes against the
+        // record context its scope captured.
+        this.closePersistence();
     }
 }
