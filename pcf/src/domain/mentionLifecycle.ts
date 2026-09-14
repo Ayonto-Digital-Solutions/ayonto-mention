@@ -45,7 +45,14 @@ export function sameMentionOccurrences(
 
     return left.every((occurrence, index) => {
         const other = right[index];
+        // The lengths match, so the counterpart is always there: the missing one is
+        // unreachable on the editor's normal path and the indexed read is only typed
+        // as optional because of `noUncheckedIndexedAccess`. The runtime guard is kept
+        // on purpose all the same. Optional chaining would satisfy the rule but
+        // instrument four short-circuit branches that can never be taken, which costs
+        // real branch coverage on this file and buys nothing.
         return (
+            // eslint-disable-next-line @typescript-eslint/prefer-optional-chain
             other !== undefined &&
             occurrence.start === other.start &&
             occurrence.name === other.name &&
