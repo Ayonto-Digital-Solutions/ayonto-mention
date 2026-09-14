@@ -41,25 +41,42 @@ export interface MentionEditorProps {
     readonly label?: string | undefined;
     readonly placeholder?: string | undefined;
     readonly userSearchProvider: UserSearchProvider;
-    readonly onChange: (value: string) => void;
+    /**
+     * Called once for each edit the user makes, with the text and the mentions
+     * standing in it **at the same instant**.
+     *
+     * One edit, one call, and both halves are already settled when it happens.
+     * They are two views of one state, and a caller that has to write them out
+     * together — a host that saves text and mention identity in one record —
+     * must never be handed one of them a moment before the other.
+     *
+     * Not called when a host value is taken over: that is not the user editing.
+     */
+    readonly onLocalEdit: (state: MentionEditorState) => void;
+    /**
+     * Called when the editor takes a value decided by the host over, with the
+     * state that value leaves behind. A host value can take a mention out from
+     * under the editor, so this is where a caller learns that it is gone.
+     */
+    readonly onHostValueAdopted?: ((state: MentionEditorState) => void) | undefined;
     readonly strings?: MentionEditorStrings | undefined;
     /** Overridable so several editors on one form do not share element ids. */
     readonly listboxId?: string | undefined;
     /**
-     * Called once for each suggestion that is actually written into the text.
-     * Not called when the picker is closed, when the mention would not fit, or
-     * when the selection fails for any other reason.
+     * False when this editor may show text but must not create a mention.
+     *
+     * The identity of a mention has to be written somewhere for it to mean
+     * anything later; where the host will not accept it, offering the picker
+     * would produce a mention that silently means nobody. Typing is unaffected.
      */
-    readonly onMentionSelected?: ((mention: MentionOccurrence) => void) | undefined;
-    /**
-     * Called whenever the set of mentions standing in the text changes — by
-     * selecting, typing, deleting, replacing a selection, or by a host value
-     * being taken over. Never called just because React re-rendered, and never
-     * twice for the same set. The array is a fresh snapshot each time.
-     */
-    readonly onWrittenMentionsChange?:
-        | ((mentions: readonly MentionOccurrence[]) => void)
-        | undefined;
+    readonly canMention?: boolean | undefined;
+}
+
+/** What the editor holds right now: the text, and who is mentioned in it. */
+export interface MentionEditorState {
+    readonly text: string;
+    /** In text order, and a fresh copy every time. */
+    readonly mentions: readonly MentionOccurrence[];
 }
 
 const useStyles = makeStyles({
@@ -129,7 +146,7 @@ function copyOccurrence(occurrence: MentionOccurrence): MentionOccurrence {
  */
 export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
     const styles = useStyles();
-    const { onChange, userSearchProvider, value } = props;
+    const { userSearchProvider, value } = props;
     const strings = props.strings ?? DEFAULT_MENTION_EDITOR_STRINGS;
     const listboxId = props.listboxId ?? DEFAULT_LISTBOX_ID;
     const optionId = React.useCallback(
@@ -169,12 +186,12 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
 
     // Held in refs so a caller passing inline callbacks does not change the
     // identity of everything downstream on every render.
-    const onMentionSelectedRef = React.useRef(props.onMentionSelected);
-    onMentionSelectedRef.current = props.onMentionSelected;
-    const onWrittenMentionsChangeRef = React.useRef(props.onWrittenMentionsChange);
-    onWrittenMentionsChangeRef.current = props.onWrittenMentionsChange;
+    const onLocalEditRef = React.useRef(props.onLocalEdit);
+    onLocalEditRef.current = props.onLocalEdit;
+    const onHostValueAdoptedRef = React.useRef(props.onHostValueAdopted);
+    onHostValueAdoptedRef.current = props.onHostValueAdopted;
 
-    /** The last set that was reported, so an unchanged set is not reported again. */
+    /** The last set that was handed out, so an unchanged set is not reported again. */
     const reportedMentions = React.useRef<readonly MentionOccurrence[]>([]);
 
     const toOccurrence = React.useCallback(
@@ -191,26 +208,32 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
     );
 
     /**
-     * Reports the mentions standing in the text, if they have changed.
+     * The mentions standing in the text right now, as the caller's own objects.
      *
-     * Called after each place the recorded mentions are rewritten, never from a
-     * render, so what a caller sees is the logical set and not React's timing.
+     * What is handed out must never be what the next comparison reads:
+     * `readonly` is a compile-time promise, and ordinary JavaScript can still
+     * write through it.
      */
-    const reportWrittenMentions = React.useCallback(() => {
+    const mentionSnapshot = React.useCallback((): readonly MentionOccurrence[] => {
         const snapshot = insertedMentions.current.map(toOccurrence);
-        if (sameMentionOccurrences(reportedMentions.current, snapshot)) {
-            return;
-        }
         reportedMentions.current = snapshot;
-        // The caller gets its own graph, down to each occurrence. What is handed
-        // out must never be what the comparison above will read next time:
-        // `readonly` is a compile-time promise, and ordinary JavaScript can still
-        // write through it.
-        onWrittenMentionsChangeRef.current?.(snapshot.map(copyOccurrence));
+        return snapshot.map(copyOccurrence);
     }, [toOccurrence]);
 
-    // A disabled field offers nobody, and a query is only ever what the caret is on.
-    const query = props.disabled ? null : (trigger?.query ?? null);
+    /** True when the recorded mentions differ from the ones last handed out. */
+    const mentionsChanged = React.useCallback(
+        () =>
+            !sameMentionOccurrences(
+                reportedMentions.current,
+                insertedMentions.current.map(toOccurrence)
+            ),
+        [toOccurrence]
+    );
+
+    // A disabled field offers nobody, a field that may not record a mention
+    // offers nobody, and a query is only ever what the caret is on.
+    const mayMention = props.canMention !== false;
+    const query = props.disabled || !mayMention ? null : (trigger?.query ?? null);
     const search = useMentionSearch(query, userSearchProvider);
     const { activeIndex, hasError, hasMore, isSearching, setActiveIndex, suggestions } = search;
 
@@ -231,12 +254,18 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
         (next: string) => {
             setText(next);
             reanchor(next);
-            // A host value can take a mention out from under the editor.
-            reportWrittenMentions();
+            const changed = mentionsChanged();
+            const state: MentionEditorState = { text: next, mentions: mentionSnapshot() };
             emittedValues.current = new Set<string>([next]);
             pendingHostValue.current = null;
+            // A host value can take a mention out from under the editor, and the
+            // caller has to hear about that. Silence when nothing moved: the host
+            // deciding on text is not by itself news about who is mentioned.
+            if (changed) {
+                onHostValueAdoptedRef.current?.(state);
+            }
         },
-        [reanchor, reportWrittenMentions]
+        [mentionSnapshot, mentionsChanged, reanchor]
     );
 
     /**
@@ -291,16 +320,25 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
         setMessage(undefined);
     }, []);
 
-    const commit = React.useCallback(
+    /**
+     * Takes one edit the user made and hands it on as a single state.
+     *
+     * The order here is the contract: the anchors are put right, the mentions
+     * are read off, and only then is anybody told. A caller that learns the text
+     * first would, for one moment, hold a text that names somebody and a mention
+     * set that does not — and a host that saves in that moment saves the two
+     * halves disagreeing.
+     */
+    const commitLocalEdit = React.useCallback(
         (next: string) => {
             setText(next);
             emittedValues.current.add(next);
             // Rule 3: this edit happened after any host value still waiting, so
             // that value is no longer the newer of the two.
             pendingHostValue.current = null;
-            onChange(next);
+            onLocalEditRef.current({ text: next, mentions: mentionSnapshot() });
         },
-        [onChange]
+        [mentionSnapshot]
     );
 
     /** Rule 4: editing has ended, so whatever the host decided may now apply. */
@@ -324,9 +362,10 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
     const syncTrigger = React.useCallback(
         (nextText: string, caret: number, mayOpen: boolean) => {
             // Editing in front of a mention moves it, so the recorded ones are put
-            // back where they now sit before they are consulted.
+            // back where they now sit before they are consulted. Nobody is told
+            // here: moving the caret changes no mention, and an edit is reported
+            // once, by the commit that follows this.
             reanchor(nextText);
-            reportWrittenMentions();
             const found = findMentionTrigger(nextText, caret);
 
             // A query may hold a space because names do, so carrying the sentence on
@@ -365,17 +404,19 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
                 return next;
             });
         },
-        [reanchor, reportWrittenMentions]
+        [reanchor]
     );
 
     const handleChange = React.useCallback(
         (event: React.ChangeEvent<HTMLTextAreaElement>, data: { value: string }) => {
             const caret = event.target.selectionStart ?? data.value.length;
             setMessage(undefined);
-            commit(data.value);
+            // Anchors and picker first, so the mentions are already where the new
+            // text puts them when the edit is handed on as one state.
             syncTrigger(data.value, caret, true);
+            commitLocalEdit(data.value);
         },
-        [commit, syncTrigger]
+        [commitLocalEdit, syncTrigger]
     );
 
     // React derives onSelect from its own heuristics, so the caret is read from the
@@ -431,24 +472,19 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
             ].sort(byStart);
 
             pendingCaret.current = result.caret;
-            commit(result.text);
             closeSuggestions();
-
-            // Reported only once the mention is actually in the text: a refused
-            // or impossible selection must look like nothing happened.
-            const occurrence = toOccurrence(written);
-            reportWrittenMentions();
-            onMentionSelectedRef.current?.(occurrence);
+            // Handed on only once the mention is actually in the text, and with
+            // the text it is in: a refused or impossible selection must look like
+            // nothing happened at all.
+            commitLocalEdit(result.text);
         },
         [
             closeSuggestions,
-            commit,
+            commitLocalEdit,
             props.maxLength,
             reanchor,
-            reportWrittenMentions,
             strings.mentionTooLong,
             text,
-            toOccurrence,
             trigger,
         ]
     );
@@ -493,7 +529,7 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
         [activeIndex, closeSuggestions, select, setActiveIndex, suggestions, trigger]
     );
 
-    const isOpen = trigger !== null && !props.disabled && !hasError;
+    const isOpen = trigger !== null && !props.disabled && mayMention && !hasError;
     const isListRendered = isOpen && !(isSearching && suggestions.length === 0);
     const hasActiveOption = isListRendered && suggestions.length > 0;
     const status = hasError

@@ -3,7 +3,11 @@ import * as ReactDOM from "react-dom";
 import { Simulate, act } from "react-dom/test-utils";
 
 import { MentionEditor } from "../src/components/MentionEditor";
-import type { MentionEditorProps } from "../src/components/MentionEditor";
+import type {
+    MentionEditorProps,
+    MentionEditorState,
+} from "../src/components/MentionEditor";
+import { sameMentionOccurrences } from "../src/domain/mentionLifecycle";
 import type { MentionOccurrence } from "../src/domain/mentionLifecycle";
 import { MENTION_SEARCH_DEBOUNCE_MS } from "../src/hooks/useMentionSearch";
 import type {
@@ -48,8 +52,33 @@ function controllableProvider(): Controllable {
 }
 
 let container: HTMLDivElement;
+/** Occurrences an edit added, the way a consumer of the reported state sees it. */
 let selected: MentionOccurrence[] = [];
+/** The reported set, kept only when it differs from the one before it. */
 let snapshots: (readonly MentionOccurrence[])[] = [];
+/** Every state the editor handed out, one per local edit or host adoption. */
+let states: MentionEditorState[] = [];
+
+/**
+ * Takes one reported state the way the adapter does: an edit carries the text
+ * and the mentions standing in it together, so what changed about the mentions
+ * is read off the state rather than announced separately.
+ */
+function record(state: MentionEditorState): void {
+    states.push(state);
+    const previous = snapshots[snapshots.length - 1] ?? [];
+    for (const mention of state.mentions) {
+        const stood = previous.some(
+            (before) => before.start === mention.start && before.userId === mention.userId
+        );
+        if (!stood) {
+            selected.push(mention);
+        }
+    }
+    if (!sameMentionOccurrences(previous, state.mentions)) {
+        snapshots.push(state.mentions);
+    }
+}
 
 const originalScrollIntoView = Object.getOwnPropertyDescriptor(
     Element.prototype,
@@ -62,9 +91,8 @@ function props(over: Partial<MentionEditorProps> = {}): MentionEditorProps {
         disabled: false,
         label: "Comment",
         userSearchProvider: { search: () => Promise.resolve({ users: [], hasMore: false }) },
-        onChange: () => undefined,
-        onMentionSelected: (mention) => selected.push(mention),
-        onWrittenMentionsChange: (mentions) => snapshots.push(mentions),
+        onLocalEdit: record,
+        onHostValueAdopted: record,
         ...over,
     };
 }
@@ -138,6 +166,7 @@ beforeEach(() => {
     document.body.appendChild(container);
     selected = [];
     snapshots = [];
+    states = [];
     Object.defineProperty(Element.prototype, "scrollIntoView", {
         configurable: true,
         writable: true,
@@ -166,8 +195,11 @@ describe("MentionEditor mention selection", () => {
         render(props({ userSearchProvider: search.provider }));
         await offer(search, "@Da", [dana], 0);
 
+        const before = states.length;
         press("Enter");
 
+        // One pick, one edit handed out, one new mention in it.
+        expect(states).toHaveLength(before + 1);
         expect(selected).toHaveLength(1);
     });
 
@@ -216,6 +248,7 @@ describe("MentionEditor mention selection", () => {
         advance();
 
         expect(selected).toEqual([]);
+        expect(states[states.length - 1]?.mentions).toEqual([]);
         expect(search.calls).toEqual([]);
     });
 });
