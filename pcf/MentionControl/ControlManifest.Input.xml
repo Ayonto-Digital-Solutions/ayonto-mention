@@ -36,7 +36,9 @@
     <resources>
       <code path="index.ts" order="1"/>
       <platform-library name="React" version="16.14.0" />
-      <platform-library name="Fluent" version="9.68.0" />
+      <platform-library name="Fluent" version="9.46.2" />
+      <resx path="strings/MentionControl.1033.resx" version="1.0.0" />
+      <resx path="strings/MentionControl.1031.resx" version="1.0.0" />
     </resources>
 
     <!-- The user lookup reads the systemuser table through the supported

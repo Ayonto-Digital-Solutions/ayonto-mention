@@ -1,8 +1,21 @@
 import * as React from "react";
-import { MessageBar, MessageBarBody, Spinner, Textarea, makeStyles, tokens } from "@fluentui/react-components";
+import {
+    MessageBar,
+    MessageBarBody,
+    Spinner,
+    Text,
+    Textarea,
+    makeStyles,
+    tokens,
+} from "@fluentui/react-components";
 
 import { SuggestionList } from "./SuggestionList";
-import { applyMention, findMentionTrigger, reanchorMentions } from "../domain/mentionText";
+import {
+    applyMention,
+    findMentionTrigger,
+    mentionDeletionRange,
+    reanchorMentions,
+} from "../domain/mentionText";
 import type { InsertedMention, MentionTrigger } from "../domain/mentionText";
 import { sameMentionOccurrences } from "../domain/mentionLifecycle";
 import type { MentionOccurrence } from "../domain/mentionLifecycle";
@@ -17,6 +30,12 @@ export interface MentionEditorStrings {
     readonly mentionTooLong: string;
     readonly moreResults: string;
     readonly suggestionsAvailable: (count: number) => string;
+    /** Shown in place of the value when the column may not be read. */
+    readonly maskedValue: string;
+    /** Explains that mentioning needs a connection. */
+    readonly offlineNotice: string;
+    /** How many characters the column still has room for. */
+    readonly charactersLeft: (remaining: number) => string;
 }
 
 /**
@@ -31,6 +50,9 @@ export const DEFAULT_MENTION_EDITOR_STRINGS: MentionEditorStrings = {
     moreResults: "More results available. Keep typing to narrow them down.",
     suggestionsAvailable: (count) =>
         count === 1 ? "1 suggestion available" : `${count.toString()} suggestions available`,
+    maskedValue: "* * * * *",
+    offlineNotice: "No connection. Mentioning is unavailable while offline.",
+    charactersLeft: (remaining) => `${remaining.toString()} characters left`,
 };
 
 export interface MentionEditorProps {
@@ -70,6 +92,17 @@ export interface MentionEditorProps {
      * would produce a mention that silently means nobody. Typing is unaffected.
      */
     readonly canMention?: boolean | undefined;
+    /**
+     * True when the host says this column may not be read. The value is then
+     * never shown, never put into the DOM, and nothing about it is editable —
+     * a masked column is masked, not merely greyed out.
+     */
+    readonly masked?: boolean | undefined;
+    /**
+     * Set when mentioning is unavailable for a reason worth telling the user
+     * about. It is shown, and the picker stays shut while it is there.
+     */
+    readonly notice?: string | undefined;
 }
 
 /** What the editor holds right now: the text, and who is mentioned in it. */
@@ -91,6 +124,20 @@ const useStyles = makeStyles({
         maxWidth: "100%",
         minWidth: 0,
         width: "100%",
+    },
+    footer: {
+        alignItems: "baseline",
+        columnGap: tokens.spacingHorizontalS,
+        display: "flex",
+        flexWrap: "wrap",
+    },
+    counter: {
+        color: tokens.colorNeutralForeground3,
+        marginInlineStart: "auto",
+    },
+    masked: {
+        color: tokens.colorNeutralForeground3,
+        display: "block",
     },
     // Announced, never shown: the list itself must stay free of anything that is
     // not a person to pick.
@@ -231,8 +278,10 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
     );
 
     // A disabled field offers nobody, a field that may not record a mention
-    // offers nobody, and a query is only ever what the caret is on.
-    const mayMention = props.canMention !== false;
+    // offers nobody, a field whose notice explains why mentioning is off offers
+    // nobody, and a query is only ever what the caret is on. Nothing is looked
+    // up in any of those cases: the query stays null, so no request is made.
+    const mayMention = props.canMention !== false && props.notice === undefined;
     const query = props.disabled || !mayMention ? null : (trigger?.query ?? null);
     const search = useMentionSearch(query, userSearchProvider);
     const { activeIndex, hasError, hasMore, isSearching, setActiveIndex, suggestions } = search;
@@ -491,6 +540,31 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
 
     const handleKeyDown = React.useCallback(
         (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+            // A mention is deleted whole. The key itself is left to the textarea:
+            // selecting the range and letting the browser remove it keeps the step
+            // in the field's own undo history, so Ctrl+Z brings the name back. This
+            // runs before the picker's keys, and while no picker is open at all —
+            // which is the ordinary state of a name picked a while ago.
+            if (event.key === "Backspace" || event.key === "Delete") {
+                const element = event.currentTarget;
+                const caret = element.selectionStart ?? 0;
+                // A selection already says what is to go; only a bare caret is
+                // ambiguous about what the key means.
+                const range =
+                    caret === element.selectionEnd
+                        ? mentionDeletionRange(
+                              element.value,
+                              caret,
+                              event.key === "Backspace" ? "backward" : "forward",
+                              insertedMentions.current
+                          )
+                        : null;
+                if (range !== null) {
+                    element.setSelectionRange(range.start, range.end);
+                    return;
+                }
+            }
+
             // The Enter that commits an IME candidate must not pick a suggestion.
             if (trigger === null || event.nativeEvent.isComposing) {
                 return;
@@ -529,9 +603,24 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
         [activeIndex, closeSuggestions, select, setActiveIndex, suggestions, trigger]
     );
 
+    // A column the host will not let this user read shows nothing of its value:
+    // not in the field, not in the DOM, not in any attribute. Every hook above
+    // has already run, so the component's shape does not change between renders.
+    if (props.masked === true) {
+        return (
+            <div className={styles.root}>
+                <Text aria-label={props.label} className={styles.masked} size={300}>
+                    {strings.maskedValue}
+                </Text>
+            </div>
+        );
+    }
+
     const isOpen = trigger !== null && !props.disabled && mayMention && !hasError;
     const isListRendered = isOpen && !(isSearching && suggestions.length === 0);
     const hasActiveOption = isListRendered && suggestions.length > 0;
+    const counterId = `${listboxId}-characters-left`;
+    const remaining = props.maxLength === undefined ? undefined : props.maxLength - text.length;
     const status = hasError
         ? strings.lookupFailed
         : isOpen && isSearching
@@ -560,6 +649,9 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
                     "aria-activedescendant": hasActiveOption ? optionId(activeIndex) : undefined,
                     "aria-autocomplete": "list",
                     "aria-controls": isListRendered ? listboxId : undefined,
+                    // Named rather than announced on every keystroke: a live
+                    // region would read the count out after each letter.
+                    "aria-describedby": remaining === undefined ? undefined : counterId,
                     "aria-expanded": isOpen,
                     "aria-label": props.label,
                     maxLength: props.maxLength,
@@ -593,11 +685,27 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
                 />
             ) : null}
 
-            {hasError || message !== undefined ? (
-                <MessageBar intent="warning" politeness="polite">
-                    <MessageBarBody>{hasError ? strings.lookupFailed : message}</MessageBarBody>
-                </MessageBar>
-            ) : null}
+            <div className={styles.footer}>
+                {props.notice !== undefined ? (
+                    <MessageBar intent="info" politeness="polite">
+                        <MessageBarBody>{props.notice}</MessageBarBody>
+                    </MessageBar>
+                ) : null}
+
+                {hasError || message !== undefined ? (
+                    <MessageBar intent="warning" politeness="polite">
+                        <MessageBarBody>
+                            {hasError ? strings.lookupFailed : message}
+                        </MessageBarBody>
+                    </MessageBar>
+                ) : null}
+
+                {remaining === undefined ? null : (
+                    <Text className={styles.counter} id={counterId} size={200}>
+                        {strings.charactersLeft(remaining)}
+                    </Text>
+                )}
+            </div>
         </div>
     );
 };

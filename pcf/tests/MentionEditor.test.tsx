@@ -628,6 +628,9 @@ describe("MentionEditor", () => {
                     mentionTooLong: "Die Erwaehnung passt nicht mehr.",
                     moreResults: "Weitere Treffer vorhanden.",
                     suggestionsAvailable: (count) => `${count.toString()} Vorschlaege`,
+                    maskedValue: "* * *",
+                    offlineNotice: "Keine Verbindung.",
+                    charactersLeft: (remaining) => `${remaining.toString()} Zeichen uebrig`,
                 },
             })
         );
