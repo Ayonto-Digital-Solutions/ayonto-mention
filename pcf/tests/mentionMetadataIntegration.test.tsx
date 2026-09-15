@@ -28,8 +28,6 @@ interface Payload {
     readonly mentions: readonly {
         readonly eventId: string;
         readonly recipientUserId: string;
-        readonly recipientName: string;
-        readonly recipientEmail?: string;
     }[];
 }
 
@@ -278,7 +276,50 @@ describe("MentionControl text and metadata as one state", () => {
         const written = JSON.parse(output?.mentionMetadata ?? "") as Payload;
         expect(written.mentions).toHaveLength(1);
         expect(written.mentions[0]?.recipientUserId).toBe("u-dana");
-        expect(written.mentions[0]?.recipientEmail).toBe("dana.winter@example.invalid");
+        // The suggestion carried a name and an address. Neither is written out:
+        // the notification is addressed from `systemuser`, where it can be
+        // trusted, not from a column anyone who may type here can write.
+        expect(Object.keys(written.mentions[0] ?? {}).sort()).toEqual([
+            "eventId",
+            "recipientUserId",
+        ]);
+        expect(output?.mentionMetadata).not.toContain("Dana Winter");
+        expect(output?.mentionMetadata).not.toContain("dana.winter@example.invalid");
+    });
+
+    it("writes nothing about a person even when the mention carries it", () => {
+        const { control, editor } = start();
+
+        edit(editor, "@Alex Rivera ", [
+            { start: 0, name: "Alex Rivera", userId: "u-alex", email: "alex.rivera@example.invalid" },
+        ]);
+
+        const written = control.getOutputs().mentionMetadata ?? "";
+        expect(written).not.toContain("Alex Rivera");
+        expect(written).not.toContain("alex.rivera@example.invalid");
+
+        const parsed = JSON.parse(written) as Payload;
+        expect(parsed.schemaVersion).toBe(1);
+        expect(parsed.sourceField).toBe("description");
+        expect(parsed.mentions).toHaveLength(1);
+        expect(Object.keys(parsed.mentions[0] ?? {}).sort()).toEqual([
+            "eventId",
+            "recipientUserId",
+        ]);
+        expect(parsed.mentions[0]?.recipientUserId).toBe("u-alex");
+    });
+
+    it("does not rewrite the payload when only the name or address changes", () => {
+        const { control, editor } = start();
+        edit(editor, "@Alex Rivera ", [alex]);
+        const before = control.getOutputs().mentionMetadata;
+
+        // Same person, same episode, written differently.
+        edit(editor, "@A. Rivera ", [
+            { start: 0, name: "A. Rivera", userId: "u-alex", email: "somewhere.else@example.invalid" },
+        ]);
+
+        expect(control.getOutputs().mentionMetadata).toBe(before);
     });
 
     it("tells the host once for one local edit", () => {
@@ -749,7 +790,7 @@ describe("MentionControl when the companion column may not be written", () => {
         // fresh session would write, and hide an overwrite completely.
         const stored =
             '{"schemaVersion":1,"sourceField":"description","mentions":' +
-            '[{"eventId":"event-old","recipientUserId":"u-old","recipientName":"Alex Rivera"}]}';
+            '[{"eventId":"event-old","recipientUserId":"u-old"}]}';
         const host = makeHost();
         const { control } = start({
             webApi: host.webAPI,
@@ -771,7 +812,7 @@ describe("MentionControl when the companion column may not be written", () => {
     it("keeps the stored payload even when a mention is reported to it", () => {
         const stored =
             '{"schemaVersion":1,"sourceField":"description","mentions":' +
-            '[{"eventId":"event-old","recipientUserId":"u-old","recipientName":"Alex Rivera"}]}';
+            '[{"eventId":"event-old","recipientUserId":"u-old"}]}';
         const { control, editor } = start({ metadata: stored, metadataEditable: false });
 
         // Even if a mention reached the adapter, nothing about it is recorded.

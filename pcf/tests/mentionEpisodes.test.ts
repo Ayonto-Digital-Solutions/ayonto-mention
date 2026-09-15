@@ -27,25 +27,20 @@ const ids = (events: readonly { eventId: string }[]): readonly string[] =>
 
 describe("MentionEpisodeTracker", () => {
     it("gives a person mentioned for the first time one notification", () => {
+        // The identifier and the person, and nothing else. The name and the
+        // address the suggestion carried stay in the editor.
         expect(tracker().update([alex])).toEqual([
-            {
-                eventId: "event-1",
-                recipientUserId: "u-alex",
-                recipientName: "Alex Rivera",
-                recipientEmail: "alex.rivera@example.invalid",
-            },
+            { eventId: "event-1", recipientUserId: "u-alex" },
         ]);
     });
 
-    it("leaves out an address the suggestion never carried", () => {
-        const events = tracker().update([dana]);
+    it("reports nothing about a person but who they are", () => {
+        const events = tracker().update([alex, dana]);
 
-        expect(events[0]).toEqual({
-            eventId: "event-1",
-            recipientUserId: "u-dana",
-            recipientName: "Dana Winter",
-        });
-        expect(events[0]).not.toHaveProperty("recipientEmail");
+        expect(events.map((event) => Object.keys(event).sort())).toEqual([
+            ["eventId", "recipientUserId"],
+            ["eventId", "recipientUserId"],
+        ]);
     });
 
     it("keeps the identifier while the mention only moves", () => {
@@ -116,23 +111,26 @@ describe("MentionEpisodeTracker", () => {
         expect(tracker().update([{ start: 0, name: "Alex Rivera", userId: "   " }])).toEqual([]);
     });
 
-    it("describes a person by their first occurrence in the text", () => {
-        const events = tracker().update([
-            { start: 40, name: "Alex Rivera", userId: "u-alex", email: "later@example.invalid" },
-            { start: 0, name: "Alex Rivera", userId: "u-alex", email: "first@example.invalid" },
-        ]);
+    it("gives the earlier identifier to the person named first in the text", () => {
+        // Passed in the other order on purpose: text order decides, not the
+        // order a caller happened to build the array in.
+        const events = tracker().update([dana, alex]);
 
-        expect(events[0]?.recipientEmail).toBe("first@example.invalid");
+        expect(events).toEqual([
+            { eventId: "event-1", recipientUserId: "u-alex" },
+            { eventId: "event-2", recipientUserId: "u-dana" },
+        ]);
     });
 
-    it("follows the name a later edit gave the same episode", () => {
+    it("reports the same thing however the person is written", () => {
         const episodes = tracker();
-        episodes.update([alex]);
+        const before = episodes.update([alex]);
 
-        const renamed = episodes.update([{ ...alex, name: "A. Rivera" }]);
+        const renamed = episodes.update([
+            { ...alex, name: "A. Rivera", email: "somewhere.else@example.invalid" },
+        ]);
 
-        expect(renamed[0]?.recipientName).toBe("A. Rivera");
-        expect(renamed[0]?.eventId).toBe("event-1");
+        expect(renamed).toEqual(before);
     });
 
     it("reports what stands right now without being asked to update", () => {
@@ -146,9 +144,9 @@ describe("MentionEpisodeTracker", () => {
         const episodes = tracker();
         const events = episodes.update([alex]);
 
-        (events[0] as { recipientName: string }).recipientName = "tampered";
+        (events[0] as { eventId: string }).eventId = "tampered";
 
-        expect(episodes.events()[0]?.recipientName).toBe("Alex Rivera");
+        expect(episodes.events()[0]?.eventId).toBe("event-1");
     });
 
     it("forgets everything when it is reset", () => {

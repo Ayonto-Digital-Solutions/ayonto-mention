@@ -24,17 +24,18 @@ import { normalizeDataverseId } from "./recordContext";
 /** Produces an identifier that has never been used before. */
 export type EventIdSource = () => string;
 
-interface Episode {
-    readonly eventId: string;
-    readonly recipientUserId: string;
-    recipientName: string;
-    recipientEmail: string | undefined;
-}
-
 export class MentionEpisodeTracker {
     private readonly newEventId: EventIdSource;
-    /** Open episodes by normalized recipient id, in the order they began. */
-    private episodes = new Map<string, Episode>();
+    /**
+     * The identifier of every open episode, by normalized recipient id, in the
+     * order the episodes began.
+     *
+     * An episode is the identifier and the person, and nothing else. What the
+     * mention says about them — the display name, the address the suggestion
+     * carried — belongs to the editor and to the moment of sending, not to the
+     * notification's identity.
+     */
+    private episodes = new Map<string, string>();
 
     constructor(newEventId: EventIdSource) {
         this.newEventId = newEventId;
@@ -44,12 +45,12 @@ export class MentionEpisodeTracker {
      * Takes the mentions standing in the text and reports who is to be notified.
      *
      * The set is authoritative: anybody missing from it has no occurrence left,
-     * so their episode ends here. What each event says about a person — their
-     * name, their address — is read from their **first** occurrence in text
-     * order, which is the one a reader would call the mention.
+     * so their episode ends here. Mentions are read in text order, so which of
+     * two people newly mentioned in one edit gets the earlier identifier does
+     * not depend on the order a caller happened to pass them in.
      */
     public update(mentions: readonly MentionOccurrence[]): readonly MentionNotificationEvent[] {
-        const next = new Map<string, Episode>();
+        const next = new Map<string, string>();
 
         for (const mention of [...mentions].sort((left, right) => left.start - right.start)) {
             const recipientUserId = normalizeDataverseId(mention.userId);
@@ -58,17 +59,13 @@ export class MentionEpisodeTracker {
                 continue;
             }
 
-            const email = (mention.email ?? "").trim();
-            const open = this.episodes.get(recipientUserId);
-            next.set(recipientUserId, {
-                // An episode that is still running keeps the identifier it began
-                // with. Only a person who is not mentioned at all right now can
-                // start a new one.
-                eventId: open?.eventId ?? this.newEventId(),
+            // An episode that is still running keeps the identifier it began
+            // with. Only a person who is not mentioned at all right now can
+            // start a new one.
+            next.set(
                 recipientUserId,
-                recipientName: mention.name.trim(),
-                recipientEmail: email.length > 0 ? email : undefined,
-            });
+                this.episodes.get(recipientUserId) ?? this.newEventId()
+            );
         }
 
         this.episodes = next;
@@ -77,20 +74,10 @@ export class MentionEpisodeTracker {
 
     /** The notifications standing right now, as their own objects. */
     public events(): readonly MentionNotificationEvent[] {
-        return [...this.episodes.values()].map((episode) =>
-            episode.recipientEmail === undefined
-                ? {
-                      eventId: episode.eventId,
-                      recipientUserId: episode.recipientUserId,
-                      recipientName: episode.recipientName,
-                  }
-                : {
-                      eventId: episode.eventId,
-                      recipientUserId: episode.recipientUserId,
-                      recipientName: episode.recipientName,
-                      recipientEmail: episode.recipientEmail,
-                  }
-        );
+        return [...this.episodes].map(([recipientUserId, eventId]) => ({
+            eventId,
+            recipientUserId,
+        }));
     }
 
     /**
@@ -101,6 +88,6 @@ export class MentionEpisodeTracker {
      * record's notification to another.
      */
     public reset(): void {
-        this.episodes = new Map<string, Episode>();
+        this.episodes = new Map<string, string>();
     }
 }
