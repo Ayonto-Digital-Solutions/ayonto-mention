@@ -58,7 +58,7 @@ Everything below is about the **client**. The server side does not exist yet.
 | Identity confirmed against Dataverse before a saved mention becomes clickable; anything unconfirmed stays ordinary text | ✅ implemented |
 | Clicking a confirmed token opens that `systemuser` through `context.navigation.openForm` | ✅ implemented |
 | Automated tests and CI | ✅ implemented |
-| Suggestion popup portalled and positioned against the field: opens below, flips above where there is no room, stays inside the viewport, follows the field when a form pane scrolls | ✅ implemented |
+| Suggestion popup portalled and positioned against the field, through Fluent's positioning: opens below, flips above where there is no room, stays inside the viewport, follows the field when a form pane scrolls | ✅ implemented in code — the flipping, shifting, scrolling and resizing are a browser's arithmetic and are checked in a real environment, not in the test suite |
 | `ayonto_mention` event table, ingest flows, dispatcher, delivery | ⏳ planned, see [Roadmap](#roadmap) |
 
 **Selecting a mention does not send anything today.** The control writes the text
@@ -316,7 +316,9 @@ tooling and then committed. See [powerplatform/README.md](powerplatform/README.m
 
 1. PCF editor, companion metadata, persisted mention identity and viewport-aware
    suggestion positioning — **implemented**
-2. Neutral Ayonto Dataverse development environment
+2. Neutral Ayonto Dataverse development environment — also where the suggestion
+   popup's flip, shift, scroll and resize behaviour gets verified against a real
+   browser
 3. Generate the solution and schema with supported Microsoft tooling
 4. `ayonto_mention` event ledger with its alternate key
 5. Table-specific ingest flow

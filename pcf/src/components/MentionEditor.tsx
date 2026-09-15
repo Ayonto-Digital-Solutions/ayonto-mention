@@ -313,9 +313,18 @@ function copyOccurrence(occurrence: MentionOccurrence): MentionOccurrence {
  * The host is expected to provide a Fluent `FluentProvider`; this component draws
  * with Fluent primitives but does not choose a theme.
  *
- * The popup is rendered in normal flow below the field. Portalling and viewport
- * measurement are deliberately left out for now, so this component needs no
- * window listeners and never walks the host's DOM.
+ * The suggestions are drawn on a Fluent `Popover`/`PopoverSurface`, which portals
+ * them out of this subtree and positions them against the textarea itself: below
+ * it and aligned to its leading edge, with Fluent free to flip or shift that when
+ * the viewport leaves no room. Fluent also keeps it there while a form pane
+ * scrolls or the window is resized.
+ *
+ * All of that positioning work belongs to Fluent, and Fluent does it the way a
+ * positioning library must — with element geometry, scroll and resize listeners
+ * and observers of its own. What this component does is state where the list
+ * should go and hand over the element it belongs to. It measures nothing itself,
+ * registers no scroll or resize listener of its own, and never walks the host's
+ * DOM to find a container to attach to.
  */
 export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
     const styles = useStyles();
