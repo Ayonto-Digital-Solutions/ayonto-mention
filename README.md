@@ -58,7 +58,7 @@ Everything below is about the **client**. The server side does not exist yet.
 | Identity confirmed against Dataverse before a saved mention becomes clickable; anything unconfirmed stays ordinary text | ✅ implemented |
 | Clicking a confirmed token opens that `systemuser` through `context.navigation.openForm` | ✅ implemented |
 | Automated tests and CI | ✅ implemented |
-| Suggestion popup positioned against the viewport through a portal | ⏳ remaining client parity item — the list currently renders in normal flow below the field |
+| Suggestion popup portalled and positioned against the field: opens below, flips above where there is no room, stays inside the viewport, follows the field when a form pane scrolls | ✅ implemented |
 | `ayonto_mention` event table, ingest flows, dispatcher, delivery | ⏳ planned, see [Roadmap](#roadmap) |
 
 **Selecting a mention does not send anything today.** The control writes the text
@@ -314,16 +314,16 @@ tooling and then committed. See [powerplatform/README.md](powerplatform/README.m
 
 ## Roadmap
 
-1. PCF editor, companion metadata and persisted mention identity — **implemented**
-2. Viewport-aware suggestion popup positioning
-3. Neutral Ayonto Dataverse development environment
-4. Generate the solution and schema with supported Microsoft tooling
-5. `ayonto_mention` event ledger with its alternate key
-6. Table-specific ingest flow
-7. Generic notification dispatcher
-8. Delivery channels and their configuration
-9. Integration, concurrency and solution-import testing
-10. Package and publish v1.0.0
+1. PCF editor, companion metadata, persisted mention identity and viewport-aware
+   suggestion positioning — **implemented**
+2. Neutral Ayonto Dataverse development environment
+3. Generate the solution and schema with supported Microsoft tooling
+4. `ayonto_mention` event ledger with its alternate key
+5. Table-specific ingest flow
+6. Generic notification dispatcher
+7. Delivery channels and their configuration
+8. Integration, concurrency and solution-import testing
+9. Package and publish v1.0.0
 
 No release date is promised.
 
