@@ -101,6 +101,59 @@ describe("MentionEpisodeTracker", () => {
         ]);
     });
 
+    it("replaces the episodes it was holding, rather than adding to them", () => {
+        // The same record, saved again by somebody else, with a different person
+        // at the same place. Two people share a display name often enough that
+        // this is ordinary, not exotic.
+        const episodes = tracker();
+        episodes.adopt(new Map([["u-robin-a", "event-a"]]));
+        episodes.update([{ start: 11, name: "Robin Fox", userId: "u-robin-a" }]);
+
+        episodes.adopt(new Map([["u-robin-b", "event-b"]]));
+
+        expect(episodes.events().map((event) => event.recipientUserId)).toEqual(["u-robin-b"]);
+        expect(episodes.events().map((event) => event.eventId)).toEqual(["event-b"]);
+    });
+
+    it("does not let a replaced person carry their old identifier back", () => {
+        const episodes = tracker();
+        episodes.adopt(new Map([["u-robin-a", "event-a"]]));
+        episodes.update([{ start: 11, name: "Robin Fox", userId: "u-robin-a" }]);
+
+        episodes.adopt(new Map([["u-robin-b", "event-b"]]));
+        // Whoever wrote the record last did not mean this person, so being
+        // mentioned again is a new thing to tell them about, with a new
+        // identifier — not a continuation of an episode nobody else knows about.
+        const written = episodes.update([
+            { start: 11, name: "Robin Fox", userId: "u-robin-b" },
+            { start: 30, name: "Robin Fox", userId: "u-robin-a" },
+        ]);
+
+        expect(written).toEqual([
+            {
+                eventId: "event-b",
+                recipientUserId: "u-robin-b",
+                occurrences: [{ start: 11, length: 10 }],
+            },
+            {
+                eventId: "event-1",
+                recipientUserId: "u-robin-a",
+                occurrences: [{ start: 30, length: 10 }],
+            },
+        ]);
+    });
+
+    it("empties itself when the record turns out to carry nobody", () => {
+        const episodes = tracker();
+        episodes.adopt(new Map([["u-alex", "event-from-the-record"]]));
+
+        episodes.adopt(new Map());
+
+        expect(episodes.events()).toEqual([]);
+        // And the same person mentioned again is a new episode, not the old one.
+        expect(ids(episodes.update([alex]))).toEqual(["event-1"]);
+    });
+
     it("starts a new episode for somebody the record never carried", () => {
         const episodes = tracker();
         episodes.adopt(new Map([["u-alex", "event-from-the-record"]]));

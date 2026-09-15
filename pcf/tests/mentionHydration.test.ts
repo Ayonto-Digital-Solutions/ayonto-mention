@@ -175,12 +175,24 @@ describe("hydratePersistedMentions", () => {
     });
 
     it("refuses two people claiming the same place", () => {
-        // Both spans begin at the same "@", so each is well-formed on its own.
-        // One position cannot speak for two people, and nothing says which.
+        // Each span reads as a whole mention on its own. One position cannot
+        // speak for two people, and nothing says which of them it meant.
         const text = "@Alex Rivera and more";
         const raw = payload([
             { eventId: EVENT_A, recipientUserId: USER_A, occurrences: [{ start: 0, length: 12 }] },
-            { eventId: EVENT_B, recipientUserId: USER_B, occurrences: [{ start: 0, length: 6 }] },
+            { eventId: EVENT_B, recipientUserId: USER_B, occurrences: [{ start: 0, length: 12 }] },
+        ]);
+
+        expect(hydrate(raw, text)).toEqual({ mentions: [], episodes: new Map() });
+    });
+
+    it("refuses two people whose places merely overlap", () => {
+        // "@Alex Rivera" and, inside it, "@Alex" — which ends at a space and so
+        // reads as a mention in its own right.
+        const text = "@Alex Rivera and more";
+        const raw = payload([
+            { eventId: EVENT_A, recipientUserId: USER_A, occurrences: [{ start: 0, length: 12 }] },
+            { eventId: EVENT_B, recipientUserId: USER_B, occurrences: [{ start: 0, length: 5 }] },
         ]);
 
         expect(hydrate(raw, text)).toEqual({ mentions: [], episodes: new Map() });
@@ -229,6 +241,58 @@ describe("hydratePersistedMentions", () => {
             mentions: [],
             episodes: new Map(),
         });
+    });
+
+    it("refuses a span that stops in the middle of what the text says", () => {
+        // Somebody typed on: the name is now "Alex RiveraX". Drawing the first
+        // twelve characters as a person would show a name the text has not got.
+        expect(hydrate(alexOnce, "Hello @Alex RiveraX today").mentions).toEqual([]);
+    });
+
+    it("takes a span that ends where a mention may end", () => {
+        for (const [text, following] of [
+            ["Hello @Alex Rivera today", "a space"],
+            ["Hello @Alex Rivera, today", "a comma"],
+            ["Hello @Alex Rivera.", "a full stop"],
+            ["Hello @Alex Rivera)", "a bracket"],
+            ["Hello @Alex Rivera\nand on", "a line break"],
+            ["Hello @Alex Rivera", "the end of the text"],
+        ]) {
+            expect({ following, mentions: hydrate(alexOnce, text).mentions }).toEqual({
+                following,
+                mentions: [{ start: 6, name: "Alex Rivera", userId: USER_A }],
+            });
+        }
+    });
+
+    it("refuses a span that runs into the next word", () => {
+        for (const text of [
+            "Hello @Alex Rivera-Smith today",
+            "Hello @Alex Riveras today",
+            "Hello @Alex Rivera/2 today",
+        ]) {
+            expect(hydrate(alexOnce, text).mentions).toEqual([]);
+        }
+    });
+
+    it("refuses an @ that could never have started a mention", () => {
+        // The "@" of an address is not a trigger, so nothing there was ever a
+        // mention, whatever a payload says about it.
+        const raw = payload([
+            { eventId: EVENT_A, recipientUserId: USER_A, occurrences: [{ start: 4, length: 12 }] },
+        ]);
+
+        expect(hydrate(raw, "mail@Alex Rivera today").mentions).toEqual([]);
+    });
+
+    it("refuses a span written across a line break", () => {
+        // A mention is never written across one, so a span that covers one
+        // cannot be describing a mention this control made.
+        const raw = payload([
+            { eventId: EVENT_A, recipientUserId: USER_A, occurrences: [{ start: 6, length: 12 }] },
+        ]);
+
+        expect(hydrate(raw, "Hello @Alex\nRivera today").mentions).toEqual([]);
     });
 
     it("refuses a span that does not begin at an @", () => {

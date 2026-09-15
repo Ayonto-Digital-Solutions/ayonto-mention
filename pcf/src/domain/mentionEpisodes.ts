@@ -85,13 +85,24 @@ export class MentionEpisodeTracker {
      * Adopts the episodes a saved record carried, so reopening it continues the
      * notifications it already had rather than starting new ones.
      *
+     * What is adopted **replaces** what was held, because a payload is the whole
+     * saved episode state of the record it came with and not an addition to an
+     * older one. The same record can legitimately be saved again with a
+     * different person at the same place — two people share a display name far
+     * too often for that to be theoretical — and merging would leave the person
+     * who was replaced behind, still holding an identifier, ready to be
+     * serialized back into the next edit as a recipient nobody named.
+     *
      * Only what a caller has already validated reaches this: the tracker does
      * not read stored payloads and does not decide what is trustworthy.
      */
     public adopt(episodes: ReadonlyMap<string, string>): void {
-        for (const [recipientUserId, eventId] of episodes) {
-            this.episodes.set(recipientUserId, { eventId, occurrences: [] });
-        }
+        this.episodes = new Map<string, OpenEpisode>(
+            [...episodes].map(([recipientUserId, eventId]) => [
+                recipientUserId,
+                { eventId, occurrences: [] },
+            ])
+        );
     }
 
     /** The notifications standing right now, as their own objects. */

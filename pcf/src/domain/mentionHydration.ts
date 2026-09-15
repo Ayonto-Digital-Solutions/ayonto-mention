@@ -19,6 +19,7 @@
  */
 
 import type { MentionOccurrence } from "./mentionLifecycle";
+import { readsAsMentionSpan } from "./mentionText";
 import { MENTION_METADATA_SCHEMA_VERSION } from "./mentionMetadata";
 import { isDataverseId, normalizeDataverseId } from "./recordContext";
 
@@ -54,11 +55,17 @@ function asInteger(value: unknown): number | null {
 /**
  * Reads one span, and only when the text in front of us still agrees with it.
  *
- * The span has to sit inside the text, be long enough to hold an "@" and at
- * least one character of a name, and actually start at an "@". A payload that
- * survived an edit it did not see — text deleted, the record saved by something
- * else — fails here, and the name it pointed at goes back to being ordinary
- * text rather than becoming a mention of whoever used to be there.
+ * The span has to sit inside the text and cover exactly what the editor itself
+ * would have written there: an "@" that could have opened a mention, a name
+ * after it, and an end where a mention may end. That last part is the whole
+ * point of asking `readsAsMentionSpan` rather than checking the "@" here — a
+ * stored span for "@Alex Rivera" must not quietly draw the first twelve
+ * characters of "@Alex RiveraX" as a person.
+ *
+ * A payload that survived an edit it did not see — text deleted, the record
+ * saved by something else — fails here, and the name it pointed at goes back to
+ * being ordinary text rather than becoming a mention of whoever used to be
+ * there.
  */
 function readOccurrence(value: unknown, text: string): { start: number; length: number } | null {
     const span = asRecord(value);
@@ -71,10 +78,7 @@ function readOccurrence(value: unknown, text: string): { start: number; length: 
     if (start === null || length === null) {
         return null;
     }
-    if (start < 0 || length <= 1 || start + length > text.length) {
-        return null;
-    }
-    if (text[start] !== "@") {
+    if (start < 0 || !readsAsMentionSpan(text, { start, end: start + length })) {
         return null;
     }
 

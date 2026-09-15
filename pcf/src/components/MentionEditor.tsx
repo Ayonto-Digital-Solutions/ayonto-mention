@@ -66,6 +66,13 @@ export const DEFAULT_MENTION_EDITOR_STRINGS: MentionEditorStrings = {
     charactersLeft: (remaining) => `${remaining.toString()} characters left`,
 };
 
+/** A host state waiting to be taken up: text, the identities in it, and which one it is. */
+interface ParkedHostState {
+    readonly text: string;
+    readonly mentions: readonly MentionOccurrence[];
+    readonly revision: number | undefined;
+}
+
 export interface MentionEditorProps {
     readonly value: string;
     readonly disabled: boolean;
@@ -126,6 +133,25 @@ export interface MentionEditorProps {
      * that cannot be confirmed.
      */
     readonly userDirectory?: UserDirectory | undefined;
+    /**
+     * False while the environment cannot be asked who a recorded mention names.
+     *
+     * A plain capability, decided by the caller: this editor does not know what
+     * a Dataverse is, let alone whether one is reachable. Left out, the caller
+     * is not saying, and the directory is asked.
+     */
+    readonly canVerifyPersistedMentions?: boolean | undefined;
+    /**
+     * Names the host state `value` and `initialMentions` belong to, changing
+     * only when the caller has taken up a genuinely new one.
+     *
+     * Text and identities arrive as one thing and are adopted as one thing. The
+     * text on its own cannot say whether that happened: the very same sentence
+     * can be saved again by somebody else meaning a different person, and an
+     * editor comparing strings would see nothing to do and go on showing — and
+     * on the next edit, writing back — the person who is no longer there.
+     */
+    readonly hostRevision?: number | undefined;
     /**
      * Opens the person a mention names. Without it the mentions still read as
      * mentions; they are simply not something to click.
@@ -387,7 +413,11 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
      */
     React.useEffect(() => {
         const directory = props.userDirectory;
-        if (directory === undefined) {
+        // Nothing to ask with, or nothing to ask through. The recorded mentions
+        // stay ordinary text and, crucially, stay *unasked*: a record opened
+        // without a connection must become readable as people again when the
+        // connection comes back, not for the rest of the session.
+        if (directory === undefined || props.canVerifyPersistedMentions === false) {
             return;
         }
 
@@ -441,19 +471,37 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
      * for it would leave the editor showing one record's words with another
      * record's people attached to them.
      */
-    const pendingHostValue = React.useRef<MentionEditorState | null>(null);
+    const pendingHostValue = React.useRef<ParkedHostState | null>(null);
     /** The mentions the caller says belong to the value it is passing in. */
     const hostMentionsRef = React.useRef(props.initialMentions ?? []);
     hostMentionsRef.current = props.initialMentions ?? [];
+    /**
+     * The host state this editor is showing.
+     *
+     * State rather than a ref: adopting a pair whose text happens to be
+     * unchanged still changes what is on screen — a different person behind the
+     * same name — and nothing else would ask React to draw it.
+     */
+    const [adoptedRevision, setAdoptedRevision] = React.useState(props.hostRevision);
+    /** The complete host state to take up, exactly as it arrived. */
+    const hostState = React.useCallback(
+        (): ParkedHostState => ({
+            text: value,
+            mentions: hostMentionsRef.current,
+            revision: props.hostRevision,
+        }),
+        [props.hostRevision, value]
+    );
 
-    /** Takes a host value over wholesale: text, anchors and bookkeeping. */
+    /** Takes a host state over wholesale: text, identities, anchors, bookkeeping. */
     const adoptHostValue = React.useCallback(
-        (next: string, mentions: readonly MentionOccurrence[]) => {
+        ({ text: next, mentions, revision }: ParkedHostState) => {
             setText(next);
             // The identities recorded for this value replace whatever was
             // attached to the one before it, in the same step as the text.
             insertedMentions.current = mentions.map((mention) => ({ ...mention }));
             anchoredText.current = next;
+            setAdoptedRevision(revision);
             const changed = mentionsChanged();
             const state: MentionEditorState = { text: next, mentions: mentionSnapshot() };
             emittedValues.current = new Set<string>([next]);
@@ -506,20 +554,30 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
     }, [props.masked]);
 
     React.useEffect(() => {
-        if (value === textRef.current) {
-            emittedValues.current = new Set<string>([value]);
-            pendingHostValue.current = null;
-            return;
+        const revision = props.hostRevision;
+        // A state the caller has taken up since the one on screen. It is new
+        // whatever the text does — the caller has already decided that — so it
+        // is checked before anything that reasons about the text.
+        const isNewHostState = revision !== undefined && revision !== adoptedRevision;
+
+        if (!isNewHostState) {
+            if (value === textRef.current) {
+                emittedValues.current = new Set<string>([value]);
+                pendingHostValue.current = null;
+                return;
+            }
+            if (emittedValues.current.has(value)) {
+                return;
+            }
         }
-        if (emittedValues.current.has(value)) {
-            return;
-        }
+
         if (isFocused.current && props.masked !== true) {
-            pendingHostValue.current = { text: value, mentions: hostMentionsRef.current };
+            // Whole, so that whenever it is applied it is applied as one thing.
+            pendingHostValue.current = hostState();
             return;
         }
-        adoptHostValue(value, hostMentionsRef.current);
-    }, [adoptHostValue, props.masked, value]);
+        adoptHostValue(hostState());
+    }, [adoptHostValue, adoptedRevision, hostState, props.hostRevision, props.masked, value]);
 
     /**
      * Carries focus across the step from reading to editing.
@@ -592,7 +650,7 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
         closeSuggestions();
         const pending = pendingHostValue.current;
         if (pending !== null) {
-            adoptHostValue(pending.text, pending.mentions);
+            adoptHostValue(pending);
         }
     }, [adoptHostValue, closeSuggestions]);
 

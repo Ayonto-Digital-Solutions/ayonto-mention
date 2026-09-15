@@ -110,6 +110,7 @@ interface HostOptions {
     readonly host?: Host;
     readonly maxLength?: number;
     readonly directory?: Record<string, string | null>;
+    readonly offline?: boolean;
 }
 
 function makeContext(options: HostOptions = {}): ComponentFramework.Context<IInputs> {
@@ -136,8 +137,8 @@ function makeContext(options: HostOptions = {}): ComponentFramework.Context<IInp
             disableScroll: false,
             getClient: () => "Web",
             getFormFactor: () => 1,
-            isOffline: () => false,
-            isNetworkAvailable: () => true,
+            isOffline: () => options.offline ?? false,
+            isNetworkAvailable: () => !(options.offline ?? false),
         },
         navigation: host.navigation,
         resources: { getString: (id: string) => resourceValue(id) },
@@ -934,5 +935,261 @@ describe("starting to edit a field that is at rest", () => {
 
         expect(field()).toBeNull();
         expect(document.activeElement).not.toBe(field());
+    });
+});
+describe("the same words, a different person", () => {
+    /** "Please ask @Robin Fox" — the mention runs from 11, ten characters long. */
+    const TEXT = "Please ask @Robin Fox";
+    const AS_USER_A = payload([
+        { eventId: EVENT_A, recipientUserId: USER_A, occurrences: [{ start: 11, length: 10 }] },
+    ]);
+    /** The same record, saved again: same sentence, the other Robin Fox. */
+    const AS_USER_B = payload([
+        { eventId: EVENT_B, recipientUserId: USER_B, occurrences: [{ start: 11, length: 10 }] },
+    ]);
+
+    interface Written {
+        readonly mentions: readonly {
+            readonly eventId: string;
+            readonly recipientUserId: string;
+            readonly occurrences: readonly Span[];
+        }[];
+    }
+
+    const written = (control: MentionControl): Written =>
+        JSON.parse(control.getOutputs().mentionMetadata ?? "") as Written;
+
+    it("follows the metadata when the text does not change at all", async () => {
+        const host = makeHost(NAMESAKES);
+        const { control } = await start({ value: TEXT, metadata: AS_USER_A, host });
+
+        act(() => {
+            Simulate.click(tokenAt(0));
+        });
+        expect(host.opened).toEqual([{ entityName: "systemuser", entityId: USER_A }]);
+
+        // Same record, same words, new authoritative payload.
+        render(control, makeContext({ value: TEXT, metadata: AS_USER_B, host }));
+        await flush();
+
+        expect(tokens()).toHaveLength(1);
+        expect(tokenAt(0).textContent).toContain("Robin Fox");
+        act(() => {
+            Simulate.click(tokenAt(0));
+        });
+        // The display name never was the identity, and it is not now.
+        expect(host.opened.map((form) => form.entityId)).toEqual([USER_A, USER_B]);
+    });
+
+    it("writes the new person back, and never the old one", async () => {
+        const host = makeHost(NAMESAKES);
+        const { control } = await start({ value: TEXT, metadata: AS_USER_A, host });
+
+        render(control, makeContext({ value: TEXT, metadata: AS_USER_B, host }));
+        await flush();
+        enterEditing();
+        type(`Hi. ${TEXT}`);
+
+        expect(written(control).mentions).toEqual([
+            {
+                eventId: EVENT_B,
+                recipientUserId: USER_B,
+                occurrences: [{ start: 15, length: 10 }],
+            },
+        ]);
+        const raw = control.getOutputs().mentionMetadata ?? "";
+        expect(raw).not.toContain(USER_A);
+        expect(raw).not.toContain(EVENT_A);
+    });
+
+    it("waits for the edit to end before changing who is meant", async () => {
+        const host = makeHost(NAMESAKES);
+        const { control } = await start({ value: TEXT, metadata: AS_USER_A, host });
+        enterEditing();
+        act(() => {
+            Simulate.focus(requiredField());
+        });
+        const caret = requiredField().selectionStart;
+
+        render(control, makeContext({ value: TEXT, metadata: AS_USER_B, host }));
+        await flush();
+
+        // Nothing moves under the hands of somebody typing.
+        expect(requiredField().value).toBe(TEXT);
+        expect(requiredField().selectionStart).toBe(caret);
+
+        act(() => {
+            Simulate.blur(requiredField());
+        });
+        await flush();
+
+        act(() => {
+            Simulate.click(tokenAt(0));
+        });
+        expect(host.opened).toEqual([{ entityName: "systemuser", entityId: USER_B }]);
+    });
+
+    it("never writes a mixture of the two", async () => {
+        const host = makeHost(NAMESAKES);
+        const { control } = await start({ value: TEXT, metadata: AS_USER_A, host });
+        enterEditing();
+        act(() => {
+            Simulate.focus(requiredField());
+        });
+
+        render(control, makeContext({ value: TEXT, metadata: AS_USER_B, host }));
+        await flush();
+        act(() => {
+            Simulate.blur(requiredField());
+        });
+        await flush();
+        enterEditing();
+        type(`${TEXT}!`);
+
+        // One person, one notification: the one the record now carries.
+        expect(written(control).mentions).toEqual([
+            {
+                eventId: EVENT_B,
+                recipientUserId: USER_B,
+                occurrences: [{ start: 11, length: 10 }],
+            },
+        ]);
+    });
+
+    it("confirms the new person in their own right", async () => {
+        // USER_B has never been asked about before, and is not taken on trust
+        // from the confirmation USER_A got for the very same name.
+        const host = makeHost({ [USER_A]: "Robin Fox", [USER_B]: null });
+        const { control } = await start({ value: TEXT, metadata: AS_USER_A, host });
+        expect(tokens()).toHaveLength(1);
+
+        render(control, makeContext({ value: TEXT, metadata: AS_USER_B, host }));
+        await flush();
+
+        expect(host.lookedUp).toEqual([USER_A, USER_B]);
+        expect(tokens()).toEqual([]);
+        expect(plainRuns()).toBe(TEXT);
+    });
+
+    it("reads the record's people again only when the record says something new", async () => {
+        const host = makeHost(NAMESAKES);
+        const { control, editor } = await start({ value: TEXT, metadata: AS_USER_A, host });
+        const opening = editor.hostRevision;
+
+        // The framework redraws a control for all sorts of reasons. The same
+        // pair, again, is not one of them.
+        const repeated = render(
+            control,
+            makeContext({ value: TEXT, metadata: AS_USER_A, host })
+        );
+        await flush();
+        expect(repeated.hostRevision).toBe(opening);
+
+        const changed = render(control, makeContext({ value: TEXT, metadata: AS_USER_B, host }));
+        await flush();
+
+        // Once for the one pair that was new, and once only.
+        expect(changed.hostRevision).toBe((opening ?? 0) + 1);
+        const again = render(control, makeContext({ value: TEXT, metadata: AS_USER_B, host }));
+        await flush();
+        expect(again.hostRevision).toBe((opening ?? 0) + 1);
+    });
+
+    it("is not re-read when the host repeats the pair it already gave", async () => {
+        const host = makeHost(NAMESAKES);
+        const { control } = await start({ value: TEXT, metadata: AS_USER_A, host });
+        enterEditing();
+        act(() => {
+            Simulate.focus(requiredField());
+        });
+        type(`${TEXT} please`);
+        const edited = control.getOutputs().field;
+        notifyCount = 0;
+
+        // The same pair the control has been working from all along.
+        render(control, makeContext({ value: TEXT, metadata: AS_USER_A, host }));
+        await flush();
+
+        // An identical redraw is not a decision: what is being typed survives it.
+        expect(requiredField().value).toBe(`${TEXT} please`);
+        expect(control.getOutputs().field).toBe(edited);
+        expect(notifyCount).toBe(0);
+    });
+});
+
+describe("opening a record without a connection", () => {
+    const TEXT = SAVED_TEXT;
+
+    it("asks nobody, shows text, and changes nothing", async () => {
+        const host = makeHost();
+        const { control } = await start({
+            value: TEXT,
+            metadata: SAVED_METADATA,
+            host,
+            offline: true,
+        });
+
+        expect(host.lookedUp).toEqual([]);
+        expect(tokens()).toEqual([]);
+        expect(plainRuns()).toBe(TEXT);
+        expect(notifyCount).toBe(0);
+        expect(control.getOutputs().field).toBe(TEXT);
+        expect(control.getOutputs().mentionMetadata).toBe(SAVED_METADATA);
+    });
+
+    it("asks once the connection is back, and shows the person then", async () => {
+        const host = makeHost();
+        const { control } = await start({
+            value: TEXT,
+            metadata: SAVED_METADATA,
+            host,
+            offline: true,
+        });
+        expect(host.lookedUp).toEqual([]);
+
+        render(control, makeContext({ value: TEXT, metadata: SAVED_METADATA, host }));
+        await flush();
+
+        // Exactly one question, asked when there was somewhere to ask it.
+        expect(host.lookedUp).toEqual([USER_A]);
+        expect(tokenAt(0).textContent).toContain("Alex Rivera");
+        // Being able to confirm something is not a change to the record.
+        expect(notifyCount).toBe(0);
+        expect(control.getOutputs().field).toBe(TEXT);
+        expect(control.getOutputs().mentionMetadata).toBe(SAVED_METADATA);
+    });
+
+    it("still lets the text be edited while there is no connection", async () => {
+        const host = makeHost();
+        const { control } = await start({
+            value: TEXT,
+            metadata: SAVED_METADATA,
+            host,
+            offline: true,
+        });
+
+        enterEditing();
+        type(`Hi. ${TEXT}`);
+
+        // The recorded notification moved with the text, unconfirmed or not.
+        const raw = JSON.parse(control.getOutputs().mentionMetadata ?? "") as {
+            mentions: { eventId: string; recipientUserId: string; occurrences: Span[] }[];
+        };
+        expect(raw.mentions[0]?.eventId).toBe(EVENT_A);
+        expect(raw.mentions[0]?.recipientUserId).toBe(USER_A);
+        expect(raw.mentions[0]?.occurrences).toEqual([{ start: 10, length: 12 }]);
+        expect(host.lookedUp).toEqual([]);
+    });
+
+    it("says why the picker is closed, and keeps it closed", async () => {
+        const { editor } = await start({
+            value: TEXT,
+            metadata: SAVED_METADATA,
+            offline: true,
+        });
+
+        expect(editor.notice).toBe(resourceValue("Editor_OfflineNotice"));
+        expect(editor.canMention).toBe(false);
+        expect(editor.canVerifyPersistedMentions).toBe(false);
     });
 });
