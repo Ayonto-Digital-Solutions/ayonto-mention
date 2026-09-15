@@ -133,8 +133,20 @@ function moveCaret(caret: number): void {
     });
 }
 
+/**
+ * Everything the editor put on screen, wherever it put it.
+ *
+ * The suggestions are positioned against the field and therefore live in a
+ * portal, outside the element this test rendered into. Reading the document
+ * rather than the container is how a user sees the field: what is on the screen
+ * is on the screen, whichever subtree it happens to hang from.
+ */
+function screenText(): string {
+    return document.body.textContent ?? "";
+}
+
 function options(): readonly HTMLElement[] {
-    return Array.from(container.querySelectorAll<HTMLElement>('[role="option"]'));
+    return Array.from(document.body.querySelectorAll<HTMLElement>('[role="option"]'));
 }
 
 function optionAt(index: number): HTMLElement {
@@ -360,7 +372,7 @@ describe("MentionEditor", () => {
 
         // "@Dana Winter " is thirteen characters, past the ten allowed.
         expect(changes).toEqual(["@Da"]);
-        expect(container.textContent).toContain("does not fit");
+        expect(screenText()).toContain("does not fit");
         expect(options()).toHaveLength(0);
         expect(field().getAttribute("aria-expanded")).toBe("false");
     });
@@ -425,9 +437,9 @@ describe("MentionEditor", () => {
             advance();
             await search.fail(0, new Error("Access denied at org-a1b2c3.example.invalid"));
 
-            expect(container.textContent).toContain("could not be looked up");
-            expect(container.textContent).not.toContain("Access denied");
-            expect(container.textContent).not.toContain("example.invalid");
+            expect(screenText()).toContain("could not be looked up");
+            expect(screenText()).not.toContain("Access denied");
+            expect(screenText()).not.toContain("example.invalid");
             expect(options()).toHaveLength(0);
             expect(field().getAttribute("aria-expanded")).toBe("false");
             expect(errors).toEqual([]);
@@ -444,7 +456,7 @@ describe("MentionEditor", () => {
 
         await openWith(search, [dana], true);
 
-        expect(container.textContent).toContain("More results available");
+        expect(screenText()).toContain("More results available");
         expect(options()).toHaveLength(1);
     });
 
@@ -644,7 +656,7 @@ describe("MentionEditor", () => {
         expect(field().getAttribute("aria-controls")).toBe("second-editor");
         expect(optionAt(0).id).toBe("second-editor-option-0");
         expect(statusText()).toContain("1 Vorschlaege");
-        expect(container.textContent).toContain("Weitere Treffer vorhanden.");
+        expect(screenText()).toContain("Weitere Treffer vorhanden.");
     });
 
     it("keeps a later mention when a new one is written in front of it", async () => {

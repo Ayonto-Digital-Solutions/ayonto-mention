@@ -5,6 +5,8 @@ import {
     InteractionTagPrimary,
     MessageBar,
     MessageBarBody,
+    Popover,
+    PopoverSurface,
     Spinner,
     Text,
     Textarea,
@@ -12,6 +14,7 @@ import {
     mergeClasses,
     tokens,
 } from "@fluentui/react-components";
+import type { PositioningProps } from "@fluentui/react-components";
 
 import { SuggestionList } from "./SuggestionList";
 import {
@@ -166,7 +169,54 @@ export interface MentionEditorState {
     readonly mentions: readonly MentionOccurrence[];
 }
 
+/**
+ * Where the suggestion list goes, relative to the field it belongs to.
+ *
+ * Below it, aligned to its leading edge, a hair of space between the two, as
+ * wide as the field, and kept inside the viewport with a small margin. Fixed
+ * positioning is what lets the list escape a form pane that clips or scrolls
+ * its contents, which is the whole reason it is not simply drawn after the
+ * field in the document.
+ *
+ * Stated once, as data, so it can be read — by the next person, and by a test —
+ * without following it through a render. Everything it asks for is worked out
+ * by Fluent: this component measures nothing.
+ */
+export const MENTION_POPUP_POSITIONING: PositioningProps = {
+    align: "start",
+    flipBoundary: "window",
+    matchTargetSize: "width",
+    offset: 2,
+    overflowBoundary: "window",
+    overflowBoundaryPadding: 8,
+    position: "below",
+    strategy: "fixed",
+};
+
 const useStyles = makeStyles({
+    /**
+     * The positioned surface the suggestions are drawn on.
+     *
+     * Fluent draws a card here — background, border, rounded corners, a drop
+     * shadow and 16px of padding — and the list already is that card. Everything
+     * visible is turned off, so the surface is nothing but a place in the
+     * viewport to put the list, and the list is what the user sees.
+     *
+     * The width rules recreate the legacy control's proportions without asking
+     * the browser how big the viewport is: Fluent matches the field's width, the
+     * minimum keeps a narrow field from producing an unreadably narrow list, and
+     * the maximum keeps the list off the edges of a small screen.
+     */
+    surface: {
+        backgroundColor: "transparent",
+        border: "none",
+        borderRadius: 0,
+        boxShadow: "none",
+        filter: "none",
+        maxWidth: "calc(100vw - 16px)",
+        minWidth: "min(300px, calc(100vw - 16px))",
+        padding: 0,
+    },
     root: {
         display: "flex",
         flexDirection: "column",
@@ -263,9 +313,18 @@ function copyOccurrence(occurrence: MentionOccurrence): MentionOccurrence {
  * The host is expected to provide a Fluent `FluentProvider`; this component draws
  * with Fluent primitives but does not choose a theme.
  *
- * The popup is rendered in normal flow below the field. Portalling and viewport
- * measurement are deliberately left out for now, so this component needs no
- * window listeners and never walks the host's DOM.
+ * The suggestions are drawn on a Fluent `Popover`/`PopoverSurface`, which portals
+ * them out of this subtree and positions them against the textarea itself: below
+ * it and aligned to its leading edge, with Fluent free to flip or shift that when
+ * the viewport leaves no room. Fluent also keeps it there while a form pane
+ * scrolls or the window is resized.
+ *
+ * All of that positioning work belongs to Fluent, and Fluent does it the way a
+ * positioning library must — with element geometry, scroll and resize listeners
+ * and observers of its own. What this component does is state where the list
+ * should go and hand over the element it belongs to. It measures nothing itself,
+ * registers no scroll or resize listener of its own, and never walks the host's
+ * DOM to find a container to attach to.
  */
 export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
     const styles = useStyles();
@@ -290,6 +349,25 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
     const [message, setMessage] = React.useState<string | undefined>(undefined);
 
     const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+    /**
+     * The same element as `textareaRef`, kept in state as well.
+     *
+     * The suggestion list is positioned against the field itself, and a ref
+     * cannot say when it arrives: the element exists only after the render that
+     * created it, while the thing that has to be told about it — the positioned
+     * surface — is decided during that render. A callback ref settles it, and
+     * costs one extra render when the field appears or goes away.
+     */
+    const [targetElement, setTargetElement] = React.useState<HTMLTextAreaElement | null>(null);
+    const setTextarea = React.useCallback((element: HTMLTextAreaElement | null) => {
+        textareaRef.current = element;
+        setTargetElement(element);
+    }, []);
+
+    const popupPositioning: PositioningProps = React.useMemo(
+        () => ({ ...MENTION_POPUP_POSITIONING, target: targetElement }),
+        [targetElement]
+    );
     const isFocused = React.useRef(false);
     /**
      * True while the field is being worked in. A field at rest shows its
@@ -981,7 +1059,10 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
 
     const isOpen = trigger !== null && !props.disabled && mayMention && !hasError;
     const isListRendered = isOpen && !(isSearching && suggestions.length === 0);
-    const hasActiveOption = isListRendered && suggestions.length > 0;
+    // A listbox exists only where there is something to pick. The note shown when
+    // nobody matches is deliberately not one, so nothing may point at it as if it
+    // were — neither `aria-controls` nor an active option.
+    const hasListbox = isListRendered && suggestions.length > 0;
     const status = hasError
         ? strings.lookupFailed
         : isOpen && isSearching
@@ -1008,9 +1089,9 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
                 textarea={{
                     // The textarea is the combobox input: it owns the popup and names
                     // the active option, while the list itself carries the options.
-                    "aria-activedescendant": hasActiveOption ? optionId(activeIndex) : undefined,
+                    "aria-activedescendant": hasListbox ? optionId(activeIndex) : undefined,
                     "aria-autocomplete": "list",
-                    "aria-controls": isListRendered ? listboxId : undefined,
+                    "aria-controls": hasListbox ? listboxId : undefined,
                     // Named rather than announced on every keystroke: a live
                     // region would read the count out after each letter.
                     "aria-describedby": remaining === undefined ? undefined : counterId,
@@ -1019,7 +1100,7 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
                     maxLength: props.maxLength,
                     onClick: handleCaretMove,
                     onKeyUp: handleCaretMove,
-                    ref: textareaRef,
+                    ref: setTextarea,
                     role: "combobox",
                 }}
                 value={text}
@@ -1030,22 +1111,54 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
                 {status}
             </div>
 
-            {isOpen && isSearching && suggestions.length === 0 ? (
-                <Spinner label={strings.searching} labelPosition="after" size="tiny" />
-            ) : null}
-
-            {isListRendered ? (
-                <SuggestionList
-                    activeIndex={activeIndex}
-                    emptyLabel={strings.noResults}
-                    id={listboxId}
-                    moreLabel={hasMore ? strings.moreResults : undefined}
-                    onHover={setActiveIndex}
-                    onSelect={select}
-                    optionId={optionId}
-                    suggestions={suggestions}
-                />
-            ) : null}
+            {/*
+              * The suggestions are drawn against the field rather than after it
+              * in the document. A field near the bottom of a form would
+              * otherwise open its list into whatever the form does below it —
+              * clipped by a scrolling pane, or simply off the screen.
+              *
+              * Fluent owns that problem. The list is portalled out of this
+              * subtree and positioned against the textarea itself, which is
+              * also what makes it follow the field when a form pane scrolls and
+              * turn upwards when there is no room below. None of that is
+              * measured here: this component never asks how big the viewport
+              * is, never listens for a scroll, and never reads a rectangle.
+              *
+              * What is open stays this editor's decision. `open` is the state
+              * the mention trigger already produces, and the callback Fluent
+              * offers for dismissing itself is deliberately not taken: a second
+              * opinion about when a list is open is how a list starts closing
+              * under the person typing into it.
+              */}
+            <Popover
+                open={isOpen}
+                positioning={popupPositioning}
+                // The list is not a dialog. Focus stays in the textarea, which
+                // is what moves through the options and picks one; a surface
+                // that focused itself would take the caret out of the sentence
+                // being written.
+                trapFocus={false}
+                unstable_disableAutoFocus
+            >
+                <PopoverSurface className={styles.surface}>
+                    {isListRendered ? (
+                        <SuggestionList
+                            activeIndex={activeIndex}
+                            emptyLabel={strings.noResults}
+                            id={listboxId}
+                            moreLabel={hasMore ? strings.moreResults : undefined}
+                            onHover={setActiveIndex}
+                            onSelect={select}
+                            optionId={optionId}
+                            suggestions={suggestions}
+                        />
+                    ) : (
+                        // The waiting state belongs in the same place the
+                        // answer will appear, not under the field.
+                        <Spinner label={strings.searching} labelPosition="after" size="tiny" />
+                    )}
+                </PopoverSurface>
+            </Popover>
 
             <div className={styles.footer}>
                 {props.notice !== undefined ? (
