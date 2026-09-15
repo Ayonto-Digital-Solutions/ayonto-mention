@@ -25,6 +25,7 @@ import {
     splitTrackedMentions,
 } from "../domain/mentionText";
 import type { InsertedMention, MentionTrigger } from "../domain/mentionText";
+import { DEFAULT_FIELD_ROWS } from "../domain/fieldRows";
 import { sameMentionOccurrences } from "../domain/mentionLifecycle";
 import type { MentionOccurrence } from "../domain/mentionLifecycle";
 import type { UserDirectory, UserSearchProvider, UserSuggestion } from "../domain/userSearch";
@@ -80,6 +81,14 @@ export interface MentionEditorProps {
     readonly value: string;
     readonly disabled: boolean;
     readonly maxLength?: number | undefined;
+    /**
+     * How many rows of text the field is at least as tall as.
+     *
+     * The caller has already settled it: a model-driven form does not tell a code
+     * component how tall the maker drew the field, so the number comes from
+     * configuration rather than from measuring anything. Left out, three rows.
+     */
+    readonly minRows?: number | undefined;
     /** Gives the textarea an accessible name. */
     readonly label?: string | undefined;
     readonly placeholder?: string | undefined;
@@ -251,7 +260,8 @@ const useStyles = makeStyles({
         fontFamily: tokens.fontFamilyBase,
         fontSize: tokens.fontSizeBase300,
         lineHeight: tokens.lineHeightBase500,
-        minHeight: "32px",
+        // The minimum is not here: it is the configured row count, given to this
+        // surface and to the textarea as one value, so the two cannot drift.
         paddingBlock: tokens.spacingVerticalSNudge,
         paddingInline: tokens.spacingHorizontalMNudge,
         whiteSpace: "pre-wrap",
@@ -328,6 +338,19 @@ function copyOccurrence(occurrence: MentionOccurrence): MentionOccurrence {
  */
 export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
     const styles = useStyles();
+    /**
+     * The smallest the field may be, as a length both views can be given.
+     *
+     * One row costs a line of text plus the padding the surface puts above and
+     * below it, written out of the same Fluent tokens both views already use, so
+     * it follows the theme's type scale instead of freezing a pixel count. The
+     * value is set on the elements themselves rather than in a stylesheet
+     * because it differs per field, and it is given to the textarea and to the
+     * read surface alike: a field that changed height on the way between reading
+     * and writing would move the rest of the form under the reader's eyes.
+     */
+    const minRows = props.minRows ?? DEFAULT_FIELD_ROWS;
+    const minFieldHeight = `calc(${minRows.toString()} * ${tokens.lineHeightBase300} + ${tokens.spacingVerticalSNudge} * 2)`;
     const { userSearchProvider, value } = props;
     const strings = props.strings ?? DEFAULT_MENTION_EDITOR_STRINGS;
     const listboxId = props.listboxId ?? DEFAULT_LISTBOX_ID;
@@ -973,6 +996,9 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
                         props.disabled ? styles.readerDisabled : undefined
                     )}
                     aria-label={props.label}
+                    // The same minimum the textarea has, so the form does not
+                    // move when the field changes between reading and writing.
+                    style={{ minHeight: minFieldHeight }}
                     // Reading is where editing starts, exactly as it does in an
                     // ordinary field: clicking the text puts the caret in it.
                     onClick={() => {
@@ -1102,6 +1128,11 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
                     onKeyUp: handleCaretMove,
                     ref: setTextarea,
                     role: "combobox",
+                    // `rows` is what a textarea is normally given, and the
+                    // minimum height is what keeps it that tall once the user is
+                    // allowed to drag the resize handle.
+                    rows: minRows,
+                    style: { minHeight: minFieldHeight },
                 }}
                 value={text}
             />

@@ -9,6 +9,7 @@ import type {
 import { DataverseUserSearchService } from "../src/services/dataverseUserSearchService";
 import { createEventId } from "../src/services/eventId";
 import { MentionEpisodeTracker } from "../src/domain/mentionEpisodes";
+import { clampFieldRows } from "../src/domain/fieldRows";
 import { hydratePersistedMentions } from "../src/domain/mentionHydration";
 import type { MentionOccurrence } from "../src/domain/mentionLifecycle";
 import { serializeMentionMetadata } from "../src/domain/mentionMetadata";
@@ -527,6 +528,7 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
             notice,
             canMention: this.mentionsAllowed && !masked && notice === undefined,
             maxLength: field.attributes?.MaxLength,
+            minRows: this.configuredRows(context),
             label: hostLabel.trim().length > 0 ? hostLabel : FALLBACK_LABEL,
             listboxId: this.listboxId,
             strings: this.getStrings(context),
@@ -544,6 +546,27 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
             onHostValueAdopted: this.handleHostValueAdopted,
             onOpenUser: this.handleOpenUser,
         });
+    }
+
+    /**
+     * How tall the field is at its smallest, in rows of text.
+     *
+     * The form knows how tall the maker drew the field and does not say:
+     * `allocatedHeight` is -1 for a field component in a model-driven app,
+     * whether or not container resizing is tracked, and reaching outside the
+     * component to measure the box it was given is not supported. So the maker
+     * says it instead.
+     *
+     * Read through a partial view of the property bag deliberately. The property
+     * is optional and was added after the control first existed, so a form
+     * configured before it — or a host that simply does not pass it — has no
+     * entry there at all, and that is one more value to fall back from rather
+     * than something to fail on.
+     */
+    private configuredRows(context: ComponentFramework.Context<IInputs>): number {
+        const parameters: Partial<IInputs> = context.parameters;
+
+        return clampFieldRows(parameters.minRows?.raw);
     }
 
     /**

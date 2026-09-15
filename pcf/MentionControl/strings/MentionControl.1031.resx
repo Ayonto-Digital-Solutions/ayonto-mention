@@ -147,6 +147,12 @@
   <data name="MentionMetadata_Desc_Key" xml:space="preserve">
     <value>Ausgeblendete Textspalte (mehrere Zeilen), die die Erwähnungen dieser Textspalte trägt. Pro erwähnungsfähiger Textspalte eine eigene Datenspalte verwenden.</value>
   </data>
+  <data name="MinRows_Display_Key" xml:space="preserve">
+    <value>Mindesthöhe in Zeilen</value>
+  </data>
+  <data name="MinRows_Desc_Key" xml:space="preserve">
+    <value>Kleinste Höhe des Felds, gezählt in Textzeilen. Nötig, weil ein modellgesteuertes Formular einem Code-Component nicht mitteilt, wie hoch es das Feld angelegt hat. Zwischen 1 und 30; alles andere fällt auf 3 zurück.</value>
+  </data>
   <data name="Editor_Placeholder" xml:space="preserve">
     <value>Mit @ jemanden erwähnen</value>
   </data>

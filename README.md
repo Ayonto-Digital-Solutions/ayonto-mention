@@ -99,10 +99,27 @@ The maker configures four properties, from
 | `recordId` | input | yes | `SingleLine.Text` | The record the mentions belong to |
 | `recordTable` | input | yes | `SingleLine.Text` | Logical name of the source table |
 | `mentionMetadata` | bound | yes | `Multiple` | The hidden companion column carrying the mentions |
+| `minRows` | input | no | `Whole.None` | Smallest height of the field, in rows of text. Default 3, clamped to 1–30 |
 
 The record id and table are configured explicitly because the framework offers no
 supported, generic way for a control to learn which record it sits on. The column
 name is *not* asked for — it is read from the bound field's own metadata.
+
+**Why the height is configured rather than detected.** The height a maker draws
+in the form designer lives in the cell's rowspan, and a code component is not
+told it: in a model-driven app `updateView` reports
+[`allocatedHeight` as `-1`](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/mode/trackcontainerresize)
+whether or not `trackContainerResize` is switched on. Measuring the box the host
+put the control in would mean reaching outside the component, which is
+[not supported](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/code-components-best-practices#avoid-using-unsupported-framework-methods),
+so this control does not do it. `minRows` is the supported answer: the maker says
+it, the field and its read view share that one minimum, and the field still
+resizes vertically and grows with its content. It is optional with a default, so
+forms configured before it existed keep working — a newer version of an imported
+code component
+[may add optional properties but not required ones](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/faq#cannot-add-remove-properties-from-code-component-once-it-is-imported).
+How this looks on a real form is checked in the DEV environment, not in the test
+suite.
 
 **One companion column per mention-enabled text column.** A Dataverse column holds
 exactly one value, and each control instance writes its own. Two mention editors

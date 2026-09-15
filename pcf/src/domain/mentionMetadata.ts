@@ -3,19 +3,28 @@
  * written out with the record so that it is committed by the same save as the
  * text, or not at all.
  *
- * It carries identity and nothing else. Not the person's name or address: those
- * are resolved from `systemuser` where the notification is actually sent, which
- * is the only place they can be trusted — this payload is written into a column
- * on a business record, and anyone who may write the text may write this too. A
- * name or an address taken from here would be whatever the writer chose. They
- * would also be a copy of somebody's personal data, sitting in a hidden column
- * on an unrelated record, for as long as that record exists.
+ * It carries identity, and where in the text that identity was written. Not the
+ * person's name or address: those are resolved from `systemuser` where the
+ * notification is actually sent, which is the only place they can be trusted —
+ * this payload is written into a column on a business record, and anyone who may
+ * write the text may write this too. A name or an address taken from here would
+ * be whatever the writer chose. They would also be a copy of somebody's personal
+ * data, sitting in a hidden column on an unrelated record, for as long as that
+ * record exists. Nor the text — that is already in the row this travels with,
+ * and a second copy would be a second truth. Nor a hash of the text — a snapshot
+ * has to prove a save happened only when nothing else can, and here the save
+ * proves itself.
  *
- * Nor where a mention sits — positions move with every keystroke and no later
- * reader needs them. Nor the text — that is already in the row this travels
- * with, and a second copy would be a second truth. Nor a hash of the text — a
- * snapshot has to prove a save happened only when nothing else can, and here the
- * save proves itself.
+ * The occurrence positions **are** written, and they exist for one job: reading a
+ * saved record back. Reopening a record has to be able to find the mentions that
+ * were in it, and the text alone cannot say which "@Robin Fox" meant which Robin
+ * Fox. They are editor state travelling with the record, nothing more.
+ *
+ * What a position is not: it is not identity, it is not permission, and it is not
+ * part of what makes a notification the notification it is — that is the event
+ * identifier and the recipient. A server-side step may read a position to
+ * understand what the editor drew. It must never treat one as a reason to notify
+ * anybody, because whoever can write the text can write any position they like.
  *
  * Pure and platform-neutral: no React, no Dataverse, no component framework.
  */
