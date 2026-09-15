@@ -45,7 +45,8 @@
          Optional, with a default, and that is not a matter of taste: a newer
          version of an imported code component may add optional properties but may
          not add required ones. Forms configured before this property existed keep
-         working untouched. Out-of-range or unreadable values fall back to 3. -->
+         working untouched. A value below 1 or above 30 is taken as the nearest of
+         the two; a value that cannot be read as a number at all, or none, is 3. -->
     <property name="minRows" display-name-key="MinRows_Display_Key" description-key="MinRows_Desc_Key" of-type="Whole.None" usage="input" required="false" default-value="3" />
 
     <resources>

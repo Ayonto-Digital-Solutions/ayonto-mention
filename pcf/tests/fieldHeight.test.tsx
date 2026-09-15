@@ -15,10 +15,14 @@ import { resourceValue } from "./support/resources";
  * A model-driven form does not tell a code component how tall the maker drew the
  * field, so the maker configures a row count instead. What is checked here is
  * that the configured number survives the trip — clamped, defaulted, and given
- * to the field and to the read surface as one and the same minimum. What is
- * deliberately *not* checked is how many pixels that turns into: jsdom lays
- * nothing out, and a test asserting rendered heights here would only be
- * asserting that jsdom returns zero.
+ * to the field and to the read surface as one and the same *contract*.
+ *
+ * That is the whole claim. These tests do not show that the two views render to
+ * the same height, or that a field never jumps when it changes between reading
+ * and writing: jsdom lays nothing out, so every box it is asked about is zero,
+ * and a test asserting rendered heights here would assert jsdom's zeros rather
+ * than anything about Power Apps. The rendered result belongs to a browser and
+ * is on the checklist for the DEV environment.
  */
 
 const RECORD_A = "aaaaaaaa-1111-2222-3333-444444444444";
@@ -235,15 +239,15 @@ describe("how tall the field starts out", () => {
     it("leaves the field resizable by hand", async () => {
         await start({ minRows: 3 });
 
-        // The minimum is a floor, not a fixed height: Fluent's vertical resize
-        // handle is untouched, and the field still grows with its content.
+        // The minimum is a floor, not a fixed height: nothing here pins the
+        // field's height or takes Fluent's vertical resize handle away.
         expect(requiredField().style.height).toBe("");
         expect(requiredField().style.maxHeight).toBe("");
     });
 });
 
-describe("reading and writing are the same height", () => {
-    it("gives the read surface the very same minimum", async () => {
+describe("reading and writing are asked for the same box", () => {
+    it("gives the read surface the very same minimum height contract", async () => {
         await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, minRows: 4 });
 
         const surface = reader();
@@ -252,7 +256,7 @@ describe("reading and writing are the same height", () => {
         expect(reading).toContain("4 *");
 
         // One click puts the same field into editing. The two minimums are one
-        // string: a field that changed height on the way would move the form.
+        // and the same string — equal inputs, which is what can be settled here.
         act(() => {
             if (surface !== null) {
                 Simulate.click(surface);
@@ -260,6 +264,30 @@ describe("reading and writing are the same height", () => {
         });
 
         expect(requiredField().style.minHeight).toBe(reading);
+    });
+
+    it("measures a row of text the same way on both", async () => {
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, minRows: 3 });
+
+        const surface = reader();
+        expect(surface).not.toBeNull();
+        const reading = surface === null ? null : window.getComputedStyle(surface);
+
+        // The values Fluent's own Textarea uses at its default `medium` size, so
+        // that "a row" costs the same on the surface that shows the text and in
+        // the field that edits it. Asserted as the tokens they are: the numbers
+        // behind them belong to the theme, and the box they add up to belongs to
+        // a browser.
+        expect(reading?.fontSize).toBe("var(--fontSizeBase300)");
+        expect(reading?.lineHeight).toBe("var(--lineHeightBase300)");
+        expect(reading?.getPropertyValue("padding-block")).toBe("var(--spacingVerticalSNudge)");
+        expect(reading?.getPropertyValue("padding-inline")).toBe(
+            "calc(var(--spacingHorizontalMNudge) + var(--spacingHorizontalXXS))"
+        );
+        // The minimum is written as rows *plus* padding, and Fluent's textarea
+        // counts its padding inside its height. Content-box here would quietly
+        // add this surface's padding on top of the same number.
+        expect(reading?.boxSizing).toBe("border-box");
     });
 
     it("keeps the same minimum when the row count changes", async () => {

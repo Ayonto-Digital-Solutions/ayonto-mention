@@ -20,11 +20,13 @@
  * were in it, and the text alone cannot say which "@Robin Fox" meant which Robin
  * Fox. They are editor state travelling with the record, nothing more.
  *
- * What a position is not: it is not identity, it is not permission, and it is not
- * part of what makes a notification the notification it is — that is the event
- * identifier and the recipient. A server-side step may read a position to
- * understand what the editor drew. It must never treat one as a reason to notify
- * anybody, because whoever can write the text can write any position they like.
+ * What a position is not: it is not identity, it is not permission, and it is no
+ * part of what makes a notification the notification it is. That is designed to
+ * be `eventId` + `recordTable` + `recordId` + `sourceField` + `recipientUserId`,
+ * and nothing else — a position is not one of the five. A server-side step may
+ * read a position to understand what the editor drew. It must never treat one as
+ * a reason to notify anybody, because whoever can write the text can write any
+ * position they like.
  *
  * Pure and platform-neutral: no React, no Dataverse, no component framework.
  */

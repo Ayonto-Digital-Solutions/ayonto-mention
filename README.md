@@ -113,8 +113,10 @@ whether or not `trackContainerResize` is switched on. Measuring the box the host
 put the control in would mean reaching outside the component, which is
 [not supported](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/code-components-best-practices#avoid-using-unsupported-framework-methods),
 so this control does not do it. `minRows` is the supported answer: the maker says
-it, the field and its read view share that one minimum, and the field still
-resizes vertically and grows with its content. It is optional with a default, so
+it, and the field and its read view are given the same type, the same padding and
+that one minimum, so both are asked for the same box. Vertical resizing stays
+enabled. Whether the two end up equally tall on a screen is a browser's answer
+and is checked in the DEV environment, not in the test suite. It is optional with a default, so
 forms configured before it existed keep working — a newer version of an imported
 code component
 [may add optional properties but not required ones](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/faq#cannot-add-remove-properties-from-code-component-once-it-is-imported).

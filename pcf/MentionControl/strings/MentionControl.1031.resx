@@ -151,7 +151,7 @@
     <value>Mindesthöhe in Zeilen</value>
   </data>
   <data name="MinRows_Desc_Key" xml:space="preserve">
-    <value>Kleinste Höhe des Felds, gezählt in Textzeilen. Nötig, weil ein modellgesteuertes Formular einem Code-Component nicht mitteilt, wie hoch es das Feld angelegt hat. Zwischen 1 und 30; alles andere fällt auf 3 zurück.</value>
+    <value>Kleinste Höhe des Felds, gezählt in Textzeilen. Nötig, weil ein modellgesteuertes Formular einem Code-Component nicht mitteilt, wie hoch es das Feld angelegt hat. Werte unter 1 oder über 30 gelten als 1 bzw. 30; ist nichts Brauchbares gesetzt, sind es 3 Zeilen.</value>
   </data>
   <data name="Editor_Placeholder" xml:space="preserve">
     <value>Mit @ jemanden erwähnen</value>

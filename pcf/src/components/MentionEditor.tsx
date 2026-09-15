@@ -252,18 +252,36 @@ const useStyles = makeStyles({
         color: tokens.colorNeutralForeground3,
         display: "block",
     },
-    // Reads like the text it stands for: the same type, the same line height,
-    // and the line breaks and runs of spaces the field actually holds.
+    /**
+     * Reads like the text it stands for, and is measured the same way.
+     *
+     * Every value here is the one Fluent's own `Textarea` uses at its default
+     * `medium` size, taken from its source rather than guessed: `body1` type,
+     * which is `fontSizeBase300` over `lineHeightBase300`; the same vertical
+     * padding; the same horizontal padding, which Fluent writes as the nudge plus
+     * the extra it leaves for the resize handle. A row therefore costs the same
+     * on both, which is what makes one configured minimum mean one thing.
+     *
+     * `border-box` for the same reason: the minimum height is written as rows of
+     * text *plus* the padding, and Fluent's textarea counts its padding inside
+     * its height. Left as `content-box`, this surface would add its padding on
+     * top of the identical number and quietly be the taller of the two.
+     *
+     * What this does not claim is that the two render to the same pixel: Fluent's
+     * root adds a border and a focus indicator, and only a browser can say what
+     * that comes to. Equal inputs are what is settled here.
+     */
     reader: {
         borderRadius: tokens.borderRadiusMedium,
+        boxSizing: "border-box",
         cursor: "text",
         fontFamily: tokens.fontFamilyBase,
         fontSize: tokens.fontSizeBase300,
-        lineHeight: tokens.lineHeightBase500,
+        lineHeight: tokens.lineHeightBase300,
         // The minimum is not here: it is the configured row count, given to this
         // surface and to the textarea as one value, so the two cannot drift.
         paddingBlock: tokens.spacingVerticalSNudge,
-        paddingInline: tokens.spacingHorizontalMNudge,
+        paddingInline: `calc(${tokens.spacingHorizontalMNudge} + ${tokens.spacingHorizontalXXS})`,
         whiteSpace: "pre-wrap",
         wordBreak: "break-word",
     },
@@ -345,9 +363,11 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
      * below it, written out of the same Fluent tokens both views already use, so
      * it follows the theme's type scale instead of freezing a pixel count. The
      * value is set on the elements themselves rather than in a stylesheet
-     * because it differs per field, and it is given to the textarea and to the
-     * read surface alike: a field that changed height on the way between reading
-     * and writing would move the rest of the form under the reader's eyes.
+     * because it differs per field, and the textarea and the read surface are
+     * given the same one — the reason the two are also given the same type and
+     * the same padding. Whether that makes them equally tall on a screen is a
+     * question for a browser; what is settled here is that they ask for the same
+     * thing.
      */
     const minRows = props.minRows ?? DEFAULT_FIELD_ROWS;
     const minFieldHeight = `calc(${minRows.toString()} * ${tokens.lineHeightBase300} + ${tokens.spacingVerticalSNudge} * 2)`;
@@ -996,8 +1016,10 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
                         props.disabled ? styles.readerDisabled : undefined
                     )}
                     aria-label={props.label}
-                    // The same minimum the textarea has, so the form does not
-                    // move when the field changes between reading and writing.
+                    // The same minimum the textarea is given, so that reading and
+                    // writing are asked for the same box. Whether they end up
+                    // pixel for pixel alike is a browser's answer, not this
+                    // component's claim.
                     style={{ minHeight: minFieldHeight }}
                     // Reading is where editing starts, exactly as it does in an
                     // ordinary field: clicking the text puts the caret in it.

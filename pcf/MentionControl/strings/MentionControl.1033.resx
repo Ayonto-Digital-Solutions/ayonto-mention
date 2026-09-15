@@ -151,7 +151,7 @@
     <value>Minimum height in rows</value>
   </data>
   <data name="MinRows_Desc_Key" xml:space="preserve">
-    <value>Smallest height of the field, counted in rows of text, used because a model-driven form does not tell a code component how tall it made the field. Between 1 and 30; anything else falls back to 3.</value>
+    <value>Smallest height of the field, counted in rows of text, used because a model-driven form does not tell a code component how tall it made the field. Anything below 1 or above 30 is taken as 1 or 30; if nothing usable is set, 3 rows are used.</value>
   </data>
   <data name="Editor_Placeholder" xml:space="preserve">
     <value>Type @ to mention someone</value>
