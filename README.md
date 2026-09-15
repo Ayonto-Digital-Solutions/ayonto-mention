@@ -34,9 +34,11 @@ Keeping identity apart from text is what gives the control these properties:
   the field, moves it without losing who it means.
 - **Mentions survive saving.** A saved record carries the identities with it, so
   reopening it continues the same mentions rather than starting new ones.
-- **One person, one event.** Mentioning the same colleague twice in one text
-  produces a single notification event for as long as they stay mentioned.
-  Removing the last occurrence ends it; mentioning them again starts a new one.
+- **One person, one episode.** While a colleague is mentioned at all, every
+  occurrence of them shares one `eventId` — naming them twice is still one
+  episode. Removing the last occurrence ends it; mentioning them again starts a
+  new episode with a new `eventId`. Nothing is dispatched and no event record is
+  created: the identifier travels with the record for a later server-side step.
 
 ## Current status
 
@@ -82,9 +84,9 @@ flowchart TD
 Solid arrows are implemented today. Everything marked *planned* is designed but
 does not exist in this repository yet.
 
-The control exposes the text and the companion metadata as bound outputs, both
-committed by the same record save. The server-side notification pipeline is
-designed to process those values only after the source record has been committed.
+The control exposes the text and the companion metadata as bound outputs. The
+server-side notification pipeline is designed to process those values only after
+the source record has been committed.
 
 ## Component configuration
 
@@ -134,7 +136,7 @@ The companion column carries `schemaVersion` 1:
 |---|---|
 | `schemaVersion` | The payload version. Anything else is not read. |
 | `sourceField` | Logical name of the text column these mentions were written in. Server-side processing is designed to validate it against configured mappings rather than trust it. |
-| `eventId` | Client-generated identity for one notification event, used for later idempotency. It identifies; it grants nothing. |
+| `eventId` | Client-generated identity for one mention episode, carried so a later server-side step can be idempotent about it. It identifies; it authorizes nothing. |
 | `recipientUserId` | The Dataverse `systemuser` id. Display names are deliberately never identity. |
 | `occurrences` | Where that person stands in the text, as UI state — see below. |
 
@@ -196,8 +198,11 @@ context again.
 
 - The control declares `external-service-usage` as disabled: no third-party calls.
 - All Dataverse access stays inside the environment the control already runs in,
-  over the documented `context.webAPI` surface, and is read-only: a `systemuser`
-  search and a single-user read. The control writes no Dataverse records.
+  over the documented `context.webAPI` surface, and is read-only: the control
+  makes no create, update or delete call. It uses `retrieveMultipleRecords` for
+  the user search and `retrieveRecord` to confirm a saved identity, and nothing
+  else. Edits to `field` and `mentionMetadata` leave the control as bound
+  outputs, which the host form persists with the record like any other value.
 - No `Xrm`, no form context, no `contextInfo`, no host DOM traversal, no
   hand-built Dataverse URLs.
 - Neither display names nor email addresses are persisted into `mentionMetadata`.
@@ -242,10 +247,11 @@ pipeline and is not implemented yet.
   is documented as available for model-driven apps and portals only, and
   `context.client.isOffline` / `isNetworkAvailable` and
   `context.navigation.openForm` are documented for model-driven apps.
-- Platform libraries as pinned in the manifest — React `16.14.0` and Fluent
-  `@fluentui/react-components` `9.46.2`, the highest version the platform's
-  allowed range accepts. The npm dependency is pinned to the same version so the
-  build compiles against what the platform provides.
+- Platform libraries: the manifest declares React `16.14.0` and Fluent
+  `@fluentui/react-components` `9.46.2`, and the npm dependencies are pinned to
+  exactly those versions, so the control is written against the API surface it
+  declares. Power Apps may load a higher compatible runtime version of a platform
+  library.
 - Node.js ≥ 24 for development
 
 ## Development
