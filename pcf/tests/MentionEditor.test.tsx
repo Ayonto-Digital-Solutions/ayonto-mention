@@ -632,6 +632,7 @@ describe("MentionEditor", () => {
                     maskedValue: "* * *",
                     offlineNotice: "Keine Verbindung.",
                     charactersLeft: (remaining) => `${remaining.toString()} Zeichen uebrig`,
+                    openMentionedUser: (name) => `${name} oeffnen`,
                 },
             })
         );
@@ -826,5 +827,27 @@ describe("MentionEditor value reconciliation", () => {
         render(props({ value: "Host again" }));
 
         expect(field().value).toBe("Host again");
+    });
+});
+
+describe("MentionEditor with nobody to open", () => {
+    it("still shows the mention, as something to read rather than to press", () => {
+        // A caller that hands over no way to open a person still gets the
+        // mention drawn: knowing who is meant is worth something on its own.
+        render(
+            props({
+                value: "Hi @Alex Rivera",
+                initialMentions: [{ start: 3, name: "Alex Rivera", userId: "u-alex" }],
+            })
+        );
+
+        const token = container.querySelector("button");
+        expect(token?.textContent).toContain("Alex Rivera");
+        expect(token?.hasAttribute("disabled")).toBe(true);
+        expect(() => {
+            act(() => {
+                Simulate.click(token as HTMLElement);
+            });
+        }).not.toThrow();
     });
 });

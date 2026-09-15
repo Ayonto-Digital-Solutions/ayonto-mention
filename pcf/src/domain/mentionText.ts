@@ -273,7 +273,54 @@ export function reanchorMentions<T extends InsertedMention>(
     return anchored;
 }
 
-/** A run of text, and the user it mentions when it is one. */
+/** A run of the text, and the mention it is when it is one. */
+export interface TrackedSegment<T extends InsertedMention> {
+    readonly text: string;
+    /** Present only for a run this editor is tracking as a mention. */
+    readonly mention?: T | undefined;
+}
+
+/**
+ * Cuts the text into the runs a reader sees: ordinary text, and the mentions
+ * this editor is tracking.
+ *
+ * Only tracked mentions become mentions. A name somebody typed by hand reads
+ * exactly like one and is not one, so it stays in the plain run around it — the
+ * text cannot say who it meant, and neither can this.
+ *
+ * Every character of the text appears in exactly one run, in order, so the runs
+ * concatenate back to what was passed in. Whitespace and line breaks are part of
+ * the plain runs and are never trimmed away.
+ */
+export function splitTrackedMentions<T extends InsertedMention>(
+    text: string,
+    mentions: readonly T[]
+): TrackedSegment<T>[] {
+    const segments: TrackedSegment<T>[] = [];
+    let plainFrom = 0;
+
+    for (const mention of [...mentions].sort((left, right) => left.start - right.start)) {
+        const { start, end } = mentionSpan(mention);
+        // A mention that no longer lines up with the text is not drawn over it.
+        if (start < plainFrom || end > text.length) {
+            continue;
+        }
+
+        if (start > plainFrom) {
+            segments.push({ text: text.slice(plainFrom, start) });
+        }
+        segments.push({ text: text.slice(start, end), mention });
+        plainFrom = end;
+    }
+
+    if (plainFrom < text.length) {
+        segments.push({ text: text.slice(plainFrom) });
+    }
+
+    return segments;
+}
+
+/** A run of text, and the user it mentions when it is one. *//** A run of text, and the user it mentions when it is one. */
 export interface MentionSegment {
     readonly text: string;
     /**

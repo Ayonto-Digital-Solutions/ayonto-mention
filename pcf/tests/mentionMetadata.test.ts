@@ -5,14 +5,23 @@ import {
 import type { MentionNotificationEvent } from "../src/domain/mentionMetadata";
 import { createEventId } from "../src/services/eventId";
 
-const alex: MentionNotificationEvent = { eventId: "event-alex", recipientUserId: "u-alex" };
-const dana: MentionNotificationEvent = { eventId: "event-dana", recipientUserId: "u-dana" };
+const alex: MentionNotificationEvent = {
+    eventId: "event-alex",
+    recipientUserId: "u-alex",
+    occurrences: [{ start: 6, length: 12 }],
+};
+const dana: MentionNotificationEvent = {
+    eventId: "event-dana",
+    recipientUserId: "u-dana",
+    occurrences: [{ start: 30, length: 12 }],
+};
 
 describe("serializeMentionMetadata", () => {
     it("writes the envelope the server reads", () => {
         expect(serializeMentionMetadata("description", [alex])).toBe(
             '{"schemaVersion":1,"sourceField":"description","mentions":' +
-                '[{"eventId":"event-alex","recipientUserId":"u-alex"}]}'
+                '[{"eventId":"event-alex","recipientUserId":"u-alex",' +
+                '"occurrences":[{"start":6,"length":12}]}]}'
         );
     });
 
@@ -22,8 +31,8 @@ describe("serializeMentionMetadata", () => {
         };
 
         expect(written.mentions.map((mention) => Object.keys(mention).sort())).toEqual([
-            ["eventId", "recipientUserId"],
-            ["eventId", "recipientUserId"],
+            ["eventId", "occurrences", "recipientUserId"],
+            ["eventId", "occurrences", "recipientUserId"],
         ]);
     });
 
@@ -41,7 +50,8 @@ describe("serializeMentionMetadata", () => {
 
         expect(written).toBe(
             '{"schemaVersion":1,"sourceField":"description","mentions":' +
-                '[{"eventId":"event-alex","recipientUserId":"u-alex"}]}'
+                '[{"eventId":"event-alex","recipientUserId":"u-alex",' +
+                '"occurrences":[{"start":6,"length":12}]}]}'
         );
         for (const leaked of [
             "Robert",

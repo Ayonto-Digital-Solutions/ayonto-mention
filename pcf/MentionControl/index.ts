@@ -9,6 +9,7 @@ import type {
 import { DataverseUserSearchService } from "../src/services/dataverseUserSearchService";
 import { createEventId } from "../src/services/eventId";
 import { MentionEpisodeTracker } from "../src/domain/mentionEpisodes";
+import { hydratePersistedMentions } from "../src/domain/mentionHydration";
 import type { MentionOccurrence } from "../src/domain/mentionLifecycle";
 import { serializeMentionMetadata } from "../src/domain/mentionMetadata";
 import { resolveRecordContext, sameRecordContext } from "../src/domain/recordContext";
@@ -132,6 +133,14 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
      * over the life of a control instance, so they are read once.
      */
     private strings: MentionEditorStrings | undefined;
+    /**
+     * The mentions the record already carried, handed to the editor when it
+     * mounts. Read once per record: reading it again on a later `updateView`
+     * would talk over what the user has done since.
+     */
+    private hydrated: readonly MentionOccurrence[] = [];
+    /** Opens the person a mention names. Replaced on every update view. */
+    private navigation: ComponentFramework.Navigation;
 
     constructor() {
         instanceCount += 1;
@@ -154,10 +163,17 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
         // API. It looks up people; nothing else here reads or writes Dataverse.
         this.userSearch = new DataverseUserSearchService(context.webAPI);
 
-        this.acceptPair({
+        this.navigation = context.navigation;
+        this.sourceField = (context.parameters.field.attributes?.LogicalName ?? "")
+            .trim()
+            .toLowerCase();
+
+        const opened: OutputPair = {
             field: context.parameters.field.raw ?? "",
             metadata: context.parameters.mentionMetadata.raw ?? "",
-        });
+        };
+        this.acceptPair(opened);
+        this.hydrate(opened);
     }
 
     /**
@@ -334,11 +350,42 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
         const crossedBoundary = previous !== null && !sameRecordContext(previous, next);
         if (crossedBoundary) {
             this.episodes.reset();
+            this.hydrated = [];
             this.editorGeneration += 1;
         }
 
         return crossedBoundary;
     }
+
+    /**
+     * Takes up the mentions a saved record already carried.
+     *
+     * The payload is read exactly once per record, against the text and the
+     * column it was written for, and only what survives that check becomes a
+     * mention. The identifiers come with it, so reopening a record continues the
+     * notifications it already had instead of starting new ones — and nothing is
+     * written back: taking a record up is not editing it.
+     */
+    private hydrate(pair: OutputPair): void {
+        const { mentions, episodes } = hydratePersistedMentions(
+            pair.metadata,
+            this.sourceField,
+            pair.field
+        );
+        this.hydrated = mentions;
+        this.episodes.adopt(episodes);
+    }
+
+    /**
+     * Opens the Dataverse user a mention names, through the framework's own
+     * navigation. A failure is consumed: it can carry the environment URL with
+     * it, the text is still perfectly readable, and there is nothing the person
+     * reading it could do about it anyway.
+     */
+    private readonly handleOpenUser = (userId: string): void => {
+        void this.navigation.openForm({ entityName: "systemuser", entityId: userId })
+            .catch(() => undefined);
+    };
 
     /**
      * Called whenever a value in the property bag changes.
@@ -379,9 +426,12 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
             // that is no longer open. The payload of the record now open comes
             // with it, and this session has made no mentions on it yet.
             this.acceptPair(host);
+            // Another record, another set of mentions to take up.
+            this.hydrate(host);
         } else {
             this.reconcile(host);
         }
+        this.navigation = context.navigation;
 
         // A column the user may not write to is read-only even when the form as a
         // whole is editable.
@@ -421,8 +471,10 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
             listboxId: this.listboxId,
             strings: this.getStrings(context),
             userSearchProvider: this.userSearch,
+            initialMentions: this.hydrated,
             onLocalEdit: this.handleLocalEdit,
             onHostValueAdopted: this.handleHostValueAdopted,
+            onOpenUser: this.handleOpenUser,
         });
     }
 
@@ -451,6 +503,8 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
             moreResults: resources.getString("Editor_MoreResults"),
             maskedValue: resources.getString("Editor_MaskedValue"),
             offlineNotice: resources.getString("Editor_OfflineNotice"),
+            openMentionedUser: (name: string) =>
+                interpolate(resources.getString("Editor_OpenMentionedUser"), name),
             suggestionsAvailable: (count: number) =>
                 interpolate(
                     resources.getString(

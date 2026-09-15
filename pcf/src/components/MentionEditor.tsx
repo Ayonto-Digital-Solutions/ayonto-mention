@@ -1,11 +1,15 @@
 import * as React from "react";
 import {
+    Avatar,
+    InteractionTag,
+    InteractionTagPrimary,
     MessageBar,
     MessageBarBody,
     Spinner,
     Text,
     Textarea,
     makeStyles,
+    mergeClasses,
     tokens,
 } from "@fluentui/react-components";
 
@@ -15,6 +19,7 @@ import {
     findMentionTrigger,
     mentionDeletionRange,
     reanchorMentions,
+    splitTrackedMentions,
 } from "../domain/mentionText";
 import type { InsertedMention, MentionTrigger } from "../domain/mentionText";
 import { sameMentionOccurrences } from "../domain/mentionLifecycle";
@@ -36,6 +41,8 @@ export interface MentionEditorStrings {
     readonly maskedValue: string;
     /** Explains that mentioning needs a connection. */
     readonly offlineNotice: string;
+    /** Names the button a mention becomes when it can be opened. */
+    readonly openMentionedUser: (name: string) => string;
     /** How many characters the column still has room for. */
     readonly charactersLeft: (remaining: number) => string;
 }
@@ -55,6 +62,7 @@ export const DEFAULT_MENTION_EDITOR_STRINGS: MentionEditorStrings = {
         count === 1 ? "1 suggestion available" : `${count.toString()} suggestions available`,
     maskedValue: "* * * * *",
     offlineNotice: "No connection. Mentioning is unavailable while offline.",
+    openMentionedUser: (name) => `Open ${name}`,
     charactersLeft: (remaining) => `${remaining.toString()} characters left`,
 };
 
@@ -106,6 +114,17 @@ export interface MentionEditorProps {
      * about. It is shown, and the picker stays shut while it is there.
      */
     readonly notice?: string | undefined;
+    /**
+     * The mentions a saved record already carried, validated by the caller. Read
+     * once, when this editor mounts: identity belongs to the record, and the
+     * editor is not the place that decides what a stored payload was worth.
+     */
+    readonly initialMentions?: readonly MentionOccurrence[] | undefined;
+    /**
+     * Opens the person a mention names. Without it the mentions still read as
+     * mentions; they are simply not something to click.
+     */
+    readonly onOpenUser?: ((userId: string) => void) | undefined;
 }
 
 /** What the editor holds right now: the text, and who is mentioned in it. */
@@ -141,6 +160,28 @@ const useStyles = makeStyles({
     masked: {
         color: tokens.colorNeutralForeground3,
         display: "block",
+    },
+    // Reads like the text it stands for: the same type, the same line height,
+    // and the line breaks and runs of spaces the field actually holds.
+    reader: {
+        borderRadius: tokens.borderRadiusMedium,
+        cursor: "text",
+        fontFamily: tokens.fontFamilyBase,
+        fontSize: tokens.fontSizeBase300,
+        lineHeight: tokens.lineHeightBase500,
+        minHeight: "32px",
+        paddingBlock: tokens.spacingVerticalSNudge,
+        paddingInline: tokens.spacingHorizontalMNudge,
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-word",
+    },
+    readerDisabled: {
+        color: tokens.colorNeutralForegroundDisabled,
+        cursor: "default",
+    },
+    // The tag sits on a text line, so it may not push that line around.
+    token: {
+        verticalAlign: "middle",
     },
     // Announced, never shown: the list itself must stay free of anything that is
     // not a person to pick.
@@ -218,10 +259,26 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
 
     const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
     const isFocused = React.useRef(false);
+    /**
+     * True while the field is being worked in. A field at rest shows its
+     * mentions as people; a field being edited shows the plain text that is
+     * actually in it, because that is what the caret, undo and the clipboard
+     * all work on.
+     *
+     * Typing counts as editing, not only focus: a change can reach this editor
+     * without a focus event ever having been raised.
+     */
+    const [isEditing, setIsEditing] = React.useState(false);
     const pendingCaret = React.useRef<number | null>(null);
 
-    /** Where this editor wrote a mention, so typing on past one is not a new query. */
-    const insertedMentions = React.useRef<TrackedMention[]>([]);
+    /**
+     * Where a mention stands, so typing on past one is not a new query — and so
+     * a reader can be shown who it means.
+     *
+     * Seeded once from what the record carried. The caller has already decided
+     * which of those are worth believing.
+     */
+    const insertedMentions = React.useRef<TrackedMention[]>([...(props.initialMentions ?? [])]);
     /**
      * The text those positions were measured against. Moving them needs the edit
      * itself, not just its result: two people of the same name leave two identical
@@ -353,6 +410,7 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
     React.useEffect(() => {
         if (props.masked === true) {
             isFocused.current = false;
+            setIsEditing(false);
         }
     }, [props.masked]);
 
@@ -397,6 +455,7 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
      */
     const commitLocalEdit = React.useCallback(
         (next: string) => {
+            setIsEditing(true);
             setText(next);
             emittedValues.current.add(next);
             // Rule 3: this edit happened after any host value still waiting, so
@@ -410,6 +469,7 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
     /** Rule 4: editing has ended, so whatever the host decided may now apply. */
     const handleBlur = React.useCallback(() => {
         isFocused.current = false;
+        setIsEditing(false);
         closeSuggestions();
         const pending = pendingHostValue.current;
         if (pending !== null) {
@@ -620,6 +680,9 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
         [activeIndex, closeSuggestions, select, setActiveIndex, suggestions, trigger]
     );
 
+    const counterId = `${listboxId}-characters-left`;
+    const remaining = props.maxLength === undefined ? undefined : props.maxLength - text.length;
+
     // A column the host will not let this user read shows nothing of its value:
     // not in the field, not in the DOM, not in any attribute. Every hook above
     // has already run, so the component's shape does not change between renders.
@@ -633,11 +696,91 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
         );
     }
 
+    /**
+     * A field at rest with mentions in it is shown as people rather than as the
+     * characters that spell them. With nothing tracked there is nothing to draw,
+     * so the field stays what it has always been — which also keeps a plain text
+     * column behaving exactly as before.
+     */
+    const isReading = !isEditing && insertedMentions.current.length > 0;
+
+    if (isReading) {
+        const openUser = props.onOpenUser;
+        return (
+            <div className={styles.root}>
+                <div
+                    className={mergeClasses(
+                        styles.reader,
+                        props.disabled ? styles.readerDisabled : undefined
+                    )}
+                    // Reading is where editing starts, exactly as it does in an
+                    // ordinary field: clicking the text puts the caret in it.
+                    onClick={() => {
+                        if (!props.disabled) {
+                            setIsEditing(true);
+                        }
+                    }}
+                    role="presentation"
+                >
+                    {splitTrackedMentions(text, insertedMentions.current).map((segment, index) => {
+                        const mention = segment.mention;
+                        return mention === undefined ? (
+                            // Runs have no identity of their own: they are cut
+                            // from the text afresh on every render.
+                            <React.Fragment key={index}>{segment.text}</React.Fragment>
+                        ) : (
+                            <InteractionTag
+                                appearance="brand"
+                                // Two mentions of one person are two runs, and
+                                // only their place tells them apart.
+                                key={index}
+                                shape="circular"
+                                size="extra-small"
+                            >
+                                <InteractionTagPrimary
+                                    aria-label={strings.openMentionedUser(
+                                        segment.text.slice(1)
+                                    )}
+                                    className={styles.token}
+                                    disabled={openUser === undefined}
+                                    media={
+                                        <Avatar
+                                            // Decorative: the tag already carries the name.
+                                            aria-hidden
+                                            color="colorful"
+                                            name={segment.text.slice(1)}
+                                            size={16}
+                                        />
+                                    }
+                                    onClick={(event: React.MouseEvent) => {
+                                        // The click is the token's, not the
+                                        // text's: it opens a person instead of
+                                        // putting a caret behind them.
+                                        event.stopPropagation();
+                                        openUser?.(mention.userId);
+                                    }}
+                                >
+                                    {segment.text.slice(1)}
+                                </InteractionTagPrimary>
+                            </InteractionTag>
+                        );
+                    })}
+                </div>
+
+                {remaining === undefined ? null : (
+                    <div className={styles.footer}>
+                        <Text className={styles.counter} size={200}>
+                            {strings.charactersLeft(remaining)}
+                        </Text>
+                    </div>
+                )}
+            </div>
+        );
+    }
+
     const isOpen = trigger !== null && !props.disabled && mayMention && !hasError;
     const isListRendered = isOpen && !(isSearching && suggestions.length === 0);
     const hasActiveOption = isListRendered && suggestions.length > 0;
-    const counterId = `${listboxId}-characters-left`;
-    const remaining = props.maxLength === undefined ? undefined : props.maxLength - text.length;
     const status = hasError
         ? strings.lookupFailed
         : isOpen && isSearching
@@ -656,6 +799,7 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
                 onChange={handleChange}
                 onFocus={() => {
                     isFocused.current = true;
+                    setIsEditing(true);
                 }}
                 onKeyDown={handleKeyDown}
                 placeholder={props.placeholder ?? strings.placeholder}

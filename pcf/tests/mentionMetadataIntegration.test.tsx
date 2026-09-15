@@ -29,6 +29,7 @@ interface Payload {
     readonly mentions: readonly {
         readonly eventId: string;
         readonly recipientUserId: string;
+        readonly occurrences: readonly { readonly start: number; readonly length: number }[];
     }[];
 }
 
@@ -303,8 +304,11 @@ describe("MentionControl text and metadata as one state", () => {
         // trusted, not from a column anyone who may type here can write.
         expect(Object.keys(written.mentions[0] ?? {}).sort()).toEqual([
             "eventId",
+            "occurrences",
             "recipientUserId",
         ]);
+        // Where the mention stands, and nothing about who stands there.
+        expect(written.mentions[0]?.occurrences).toEqual([{ start: 0, length: 12 }]);
         expect(output?.mentionMetadata).not.toContain("Dana Winter");
         expect(output?.mentionMetadata).not.toContain("dana.winter@example.invalid");
     });
@@ -326,22 +330,28 @@ describe("MentionControl text and metadata as one state", () => {
         expect(parsed.mentions).toHaveLength(1);
         expect(Object.keys(parsed.mentions[0] ?? {}).sort()).toEqual([
             "eventId",
+            "occurrences",
             "recipientUserId",
         ]);
         expect(parsed.mentions[0]?.recipientUserId).toBe("u-alex");
     });
 
-    it("does not rewrite the payload when only the name or address changes", () => {
+    it("keeps the identity when only the name or address changes", () => {
         const { control, editor } = start();
         edit(editor, "@Alex Rivera ", [alex]);
-        const before = control.getOutputs().mentionMetadata;
+        const before = JSON.parse(control.getOutputs().mentionMetadata ?? "") as Payload;
 
         // Same person, same episode, written differently.
         edit(editor, "@A. Rivera ", [
             { start: 0, name: "A. Rivera", userId: "u-alex", email: "somewhere.else@example.invalid" },
         ]);
 
-        expect(control.getOutputs().mentionMetadata).toBe(before);
+        const after = JSON.parse(control.getOutputs().mentionMetadata ?? "") as Payload;
+        expect(after.mentions[0]?.eventId).toBe(before.mentions[0]?.eventId);
+        expect(after.mentions[0]?.recipientUserId).toBe("u-alex");
+        // Only the span follows the text; nothing about the person is written.
+        expect(after.mentions[0]?.occurrences).toEqual([{ start: 0, length: 10 }]);
+        expect(control.getOutputs().mentionMetadata).not.toContain("Rivera");
     });
 
     it("tells the host once for one local edit", () => {

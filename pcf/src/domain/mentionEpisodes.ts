@@ -1,5 +1,5 @@
 import type { MentionOccurrence } from "./mentionLifecycle";
-import type { MentionNotificationEvent } from "./mentionMetadata";
+import type { MentionNotificationEvent, MentionOccurrenceSpan } from "./mentionMetadata";
 import { normalizeDataverseId } from "./recordContext";
 
 /**
@@ -24,18 +24,24 @@ import { normalizeDataverseId } from "./recordContext";
 /** Produces an identifier that has never been used before. */
 export type EventIdSource = () => string;
 
+/** What is known about one person while the mentions standing in the text are read. */
+interface OpenEpisode {
+    readonly eventId: string;
+    readonly occurrences: MentionOccurrenceSpan[];
+}
+
 export class MentionEpisodeTracker {
     private readonly newEventId: EventIdSource;
     /**
-     * The identifier of every open episode, by normalized recipient id, in the
-     * order the episodes began.
+     * Every open episode by normalized recipient id, in the order the episodes
+     * began.
      *
-     * An episode is the identifier and the person, and nothing else. What the
-     * mention says about them — the display name, the address the suggestion
-     * carried — belongs to the editor and to the moment of sending, not to the
-     * notification's identity.
+     * An episode is the identifier, the person, and where in the text they are
+     * mentioned. What the mention says *about* them — the display name, the
+     * address the suggestion carried — belongs to the editor and to the moment
+     * of sending, not to the notification's identity.
      */
-    private episodes = new Map<string, string>();
+    private episodes = new Map<string, OpenEpisode>();
 
     constructor(newEventId: EventIdSource) {
         this.newEventId = newEventId;
@@ -50,33 +56,53 @@ export class MentionEpisodeTracker {
      * not depend on the order a caller happened to pass them in.
      */
     public update(mentions: readonly MentionOccurrence[]): readonly MentionNotificationEvent[] {
-        const next = new Map<string, string>();
+        const next = new Map<string, OpenEpisode>();
 
         for (const mention of [...mentions].sort((left, right) => left.start - right.start)) {
             const recipientUserId = normalizeDataverseId(mention.userId);
             // Nobody can be identified from this, so nobody can be notified.
-            if (recipientUserId.length === 0 || next.has(recipientUserId)) {
+            if (recipientUserId.length === 0) {
                 continue;
             }
 
             // An episode that is still running keeps the identifier it began
-            // with. Only a person who is not mentioned at all right now can
-            // start a new one.
-            next.set(
-                recipientUserId,
-                this.episodes.get(recipientUserId) ?? this.newEventId()
-            );
+            // with, wherever the mention has moved to and however many times the
+            // person is named. Only somebody who is not mentioned at all right
+            // now can start a new one.
+            const open = next.get(recipientUserId) ?? {
+                eventId: this.episodes.get(recipientUserId)?.eventId ?? this.newEventId(),
+                occurrences: [],
+            };
+            open.occurrences.push({ start: mention.start, length: mention.name.length + 1 });
+            next.set(recipientUserId, open);
         }
 
         this.episodes = next;
         return this.events();
     }
 
+    /**
+     * Adopts the episodes a saved record carried, so reopening it continues the
+     * notifications it already had rather than starting new ones.
+     *
+     * Only what a caller has already validated reaches this: the tracker does
+     * not read stored payloads and does not decide what is trustworthy.
+     */
+    public adopt(episodes: ReadonlyMap<string, string>): void {
+        for (const [recipientUserId, eventId] of episodes) {
+            this.episodes.set(recipientUserId, { eventId, occurrences: [] });
+        }
+    }
+
     /** The notifications standing right now, as their own objects. */
     public events(): readonly MentionNotificationEvent[] {
-        return [...this.episodes].map(([recipientUserId, eventId]) => ({
-            eventId,
+        return [...this.episodes].map(([recipientUserId, episode]) => ({
+            eventId: episode.eventId,
             recipientUserId,
+            occurrences: episode.occurrences.map((occurrence) => ({
+                start: occurrence.start,
+                length: occurrence.length,
+            })),
         }));
     }
 
@@ -88,6 +114,6 @@ export class MentionEpisodeTracker {
      * record's notification to another.
      */
     public reset(): void {
-        this.episodes = new Map<string, string>();
+        this.episodes = new Map<string, OpenEpisode>();
     }
 }
