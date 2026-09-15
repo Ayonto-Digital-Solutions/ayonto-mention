@@ -1,6 +1,6 @@
 # Ayonto Mention
 
-Production-ready @mention component and notification framework for Microsoft Power Apps and Dataverse.
+An @mention component and notification framework for Microsoft Power Apps and Dataverse, currently in active development toward v1.0.0.
 
 ## Status
 
