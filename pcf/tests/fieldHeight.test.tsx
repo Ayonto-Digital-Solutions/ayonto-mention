@@ -150,7 +150,28 @@ function requiredField(): HTMLTextAreaElement {
     return element;
 }
 
+/**
+ * True while the field is the thing being typed in.
+ *
+ * The textarea is no longer torn down to show the people view — it stays
+ * mounted underneath, covered and hidden from assistive technology — so "is
+ * there a textarea" no longer answers "is this field being edited". This does.
+ */
+function isEditing(): boolean {
+    const element = field();
+
+    return element !== null && element.getAttribute("aria-hidden") !== "true";
+}
+
 const reader = (): HTMLElement | null => container.querySelector('[role="group"]');
+
+function requiredSurface(): HTMLElement {
+    const element = reader();
+    if (element === null) {
+        throw new Error("the field is not showing its people view");
+    }
+    return element;
+}
 
 beforeEach(() => {
     jest.useFakeTimers();
@@ -246,24 +267,26 @@ describe("how tall the field starts out", () => {
     });
 });
 
-describe("reading and writing are asked for the same box", () => {
-    it("gives the read surface the very same minimum height contract", async () => {
+describe("reading and writing are one box", () => {
+    it("keeps the field itself while the people view is shown", async () => {
         await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, minRows: 4 });
 
+        // The read view does not replace the field; it covers it. The minimum —
+        // and whatever height the field has been given since — belongs to the
+        // one element underneath, which is still there.
         const surface = reader();
         expect(surface).not.toBeNull();
-        const reading = surface === null ? "" : surface.style.minHeight;
-        expect(reading).toContain("4 *");
+        expect(requiredField().style.minHeight).toContain("4 *");
+        expect(window.getComputedStyle(requiredSurface()).position).toBe("absolute");
 
-        // One click puts the same field into editing. The two minimums are one
-        // and the same string — equal inputs, which is what can be settled here.
         act(() => {
             if (surface !== null) {
                 Simulate.click(surface);
             }
         });
 
-        expect(requiredField().style.minHeight).toBe(reading);
+        // Editing the same box, not a different one.
+        expect(requiredField().style.minHeight).toContain("4 *");
     });
 
     it("measures a row of text the same way on both", async () => {
@@ -290,9 +313,9 @@ describe("reading and writing are asked for the same box", () => {
         expect(reading?.boxSizing).toBe("border-box");
     });
 
-    it("keeps the same minimum when the row count changes", async () => {
+    it("follows the row count while the people view is up", async () => {
         const { control } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, minRows: 2 });
-        expect(reader()?.style.minHeight).toContain("2 *");
+        expect(requiredField().style.minHeight).toContain("2 *");
 
         render(
             control,
@@ -300,7 +323,8 @@ describe("reading and writing are asked for the same box", () => {
         );
         await flush();
 
-        expect(reader()?.style.minHeight).toContain("6 *");
+        expect(reader()).not.toBeNull();
+        expect(requiredField().style.minHeight).toContain("6 *");
     });
 });
 
@@ -357,7 +381,7 @@ describe("what a height is not allowed to change", () => {
                 Simulate.click(surface);
             }
         });
-        expect(field()).toBeNull();
+        expect(isEditing()).toBe(false);
     });
 
     it("still shows saved mentions as people, at any height", async () => {
@@ -410,5 +434,135 @@ describe("two fields on one form", () => {
             ReactDOM.unmountComponentAtNode(second);
         });
         second.remove();
+    });
+});
+
+describe("a height the user gave the field", () => {
+    it("survives the trip through the people view", async () => {
+        const { control } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+
+        // Into editing, and hold on to the actual element.
+        const surface = reader();
+        act(() => {
+            if (surface !== null) {
+                Simulate.click(surface);
+            }
+        });
+        const editor = requiredField();
+
+        // Standing in for a height the browser owns: dragging the resize handle
+        // writes exactly this, on exactly this element. jsdom cannot perform the
+        // drag, and this test does not pretend it can — what it checks is that
+        // the thing the browser wrote on is still the thing that comes back.
+        editor.style.height = "180px";
+
+        act(() => {
+            Simulate.blur(editor);
+        });
+        await flush();
+
+        expect(reader()).not.toBeNull();
+        const whileReading = field();
+        expect(whileReading).not.toBeNull();
+        expect(whileReading).toBe(editor);
+        expect(whileReading?.style.height).toBe("180px");
+
+        // And back into editing: still the same element, still that height.
+        const back = reader();
+        act(() => {
+            if (back !== null) {
+                Simulate.click(back);
+            }
+        });
+
+        expect(requiredField()).toBe(editor);
+        expect(requiredField().style.height).toBe("180px");
+        // Nothing about any of this is an edit.
+        expect(notifyCount).toBe(0);
+        expect(control.getOutputs().field).toBe(SAVED_TEXT);
+    });
+
+    it("is not rebuilt when the value comes back from the host unchanged", async () => {
+        const { control } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+        const first = field();
+        expect(first).not.toBeNull();
+
+        render(control, makeContext({ value: SAVED_TEXT, metadata: SAVED_METADATA }));
+        await flush();
+
+        expect(field()).toBe(first);
+    });
+});
+
+describe("what the people view leaves reachable", () => {
+    it("offers the reader, and not a second field behind it", async () => {
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+
+        const surface = requiredSurface();
+        // One thing to reach: the reader. The field underneath is covered, taken
+        // out of the tab order and hidden from assistive technology, so the value
+        // is not offered twice.
+        expect(surface.getAttribute("tabindex")).toBe("0");
+        expect(requiredField().getAttribute("aria-hidden")).toBe("true");
+        expect(requiredField().tabIndex).toBe(-1);
+    });
+
+    it("still opens the person a token names, without starting an edit", async () => {
+        const { control } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+
+        const token = container.querySelector("button");
+        expect(token?.textContent).toContain("Alex Rivera");
+        act(() => {
+            if (token !== null) {
+                Simulate.click(token);
+            }
+        });
+
+        expect(isEditing()).toBe(false);
+        expect(reader()).not.toBeNull();
+        expect(control.getOutputs().field).toBe(SAVED_TEXT);
+    });
+
+    it("puts the caret in the very field it was covering", async () => {
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+        const covered = field();
+
+        const surface = requiredSurface();
+        act(() => {
+            Simulate.keyDown(surface, { key: "Enter" });
+        });
+
+        // The element that was hidden is the element now being typed in.
+        expect(document.activeElement).toBe(covered);
+        expect(requiredField().getAttribute("aria-hidden")).toBeNull();
+        expect(requiredField().tabIndex).not.toBe(-1);
+        expect(reader()).toBeNull();
+    });
+
+    it("keeps a read-only field out of editing, covered field and all", async () => {
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, disabled: true });
+
+        const surface = requiredSurface();
+        expect(surface.getAttribute("tabindex")).toBe("-1");
+        act(() => {
+            Simulate.keyDown(surface, { key: "Enter" });
+        });
+        act(() => {
+            Simulate.click(surface);
+        });
+
+        expect(isEditing()).toBe(false);
+        expect(requiredField().disabled).toBe(true);
+    });
+
+    it("puts nothing of an unreadable column into the page, field included", async () => {
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, readable: false });
+
+        // Masking is the one case where the field really is gone: a hidden
+        // textarea would still be carrying the value it is meant to withhold.
+        expect(field()).toBeNull();
+        expect(reader()).toBeNull();
+        expect(container.innerHTML).not.toContain("Alex Rivera");
+        expect(container.innerHTML).not.toContain("Hello @");
     });
 });

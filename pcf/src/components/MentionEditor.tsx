@@ -253,6 +253,17 @@ const useStyles = makeStyles({
         display: "block",
     },
     /**
+     * The field itself: one box, owned by the textarea inside it.
+     *
+     * Everything that shows the value lives here, so there is one thing on the
+     * form whose height can be dragged, kept by the browser and grown by a row
+     * count — rather than two views taking turns at being the field.
+     */
+    field: {
+        position: "relative",
+        width: "100%",
+    },
+    /**
      * Reads like the text it stands for, and is measured the same way.
      *
      * Every value here is the one Fluent's own `Textarea` uses at its default
@@ -272,16 +283,28 @@ const useStyles = makeStyles({
      * that comes to. Equal inputs are what is settled here.
      */
     reader: {
+        backgroundColor: tokens.colorNeutralBackground1,
         borderRadius: tokens.borderRadiusMedium,
+        // Laid over the field rather than put in its place. The box is the
+        // textarea's — its height, including whatever height the user dragged it
+        // to — and this covers it, inside Fluent's border and clear of the focus
+        // indicator along the bottom. Nothing is measured to do it: the four
+        // sides are told where the box is and the browser does the arithmetic.
+        bottom: tokens.strokeWidthThick,
         boxSizing: "border-box",
         cursor: "text",
         fontFamily: tokens.fontFamilyBase,
         fontSize: tokens.fontSizeBase300,
+        insetInlineEnd: "1px",
+        insetInlineStart: "1px",
         lineHeight: tokens.lineHeightBase300,
-        // The minimum is not here: it is the configured row count, given to this
-        // surface and to the textarea as one value, so the two cannot drift.
+        // Long text scrolls inside the field, the way it does while it is being
+        // written, instead of growing a second box the form must find room for.
+        overflowY: "auto",
         paddingBlock: tokens.spacingVerticalSNudge,
         paddingInline: `calc(${tokens.spacingHorizontalMNudge} + ${tokens.spacingHorizontalXXS})`,
+        position: "absolute",
+        top: "1px",
         whiteSpace: "pre-wrap",
         wordBreak: "break-word",
     },
@@ -1006,104 +1029,101 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
      */
     const isReading = !isEditing && insertedMentions.current.length > 0;
 
-    if (isReading) {
-        const openUser = props.onOpenUser;
-        return (
-            <div className={styles.root}>
-                <div
-                    className={mergeClasses(
-                        styles.reader,
-                        props.disabled ? styles.readerDisabled : undefined
-                    )}
-                    aria-label={props.label}
-                    // The same minimum the textarea is given, so that reading and
-                    // writing are asked for the same box. Whether they end up
-                    // pixel for pixel alike is a browser's answer, not this
-                    // component's claim.
-                    style={{ minHeight: minFieldHeight }}
-                    // Reading is where editing starts, exactly as it does in an
-                    // ordinary field: clicking the text puts the caret in it.
-                    onClick={() => {
-                        if (!props.disabled) {
-                            beginEditing();
-                        }
-                    }}
-                    // The same step without a mouse. Enter and Space are what a
-                    // field at rest answers to, so a keyboard user reaches the
-                    // text the same way and by the same keys.
-                    onKeyDown={(event: React.KeyboardEvent) => {
-                        if (props.disabled || (event.key !== "Enter" && event.key !== " ")) {
-                            return;
-                        }
-                        // Space would otherwise scroll the form out from under
-                        // the field it just opened.
-                        event.preventDefault();
-                        beginEditing();
-                    }}
-                    // A group rather than a textbox: it holds the tokens, which
-                    // are reachable in their own right, and it is not itself
-                    // something to type into.
-                    role="group"
-                    tabIndex={props.disabled ? -1 : 0}
-                >
-                    {splitTrackedMentions(text, insertedMentions.current).map((segment, index) => {
-                        const mention = segment.mention;
-                        // Not confirmed, not a person: the characters are shown
-                        // as the text they are, and pressing them starts editing
-                        // like any other part of the value.
-                        return mention === undefined || !verified.has(identityKey(mention)) ? (
-                            // Runs have no identity of their own: they are cut
-                            // from the text afresh on every render.
-                            <React.Fragment key={index}>{segment.text}</React.Fragment>
-                        ) : (
-                            <InteractionTag
-                                appearance="brand"
-                                // Two mentions of one person are two runs, and
-                                // only their place tells them apart.
-                                key={index}
-                                shape="circular"
-                                size="extra-small"
-                            >
-                                <InteractionTagPrimary
-                                    aria-label={strings.openMentionedUser(
-                                        segment.text.slice(1)
-                                    )}
-                                    className={styles.token}
-                                    disabled={openUser === undefined}
-                                    media={
-                                        <Avatar
-                                            // Decorative: the tag already carries the name.
-                                            aria-hidden
-                                            color="colorful"
-                                            name={segment.text.slice(1)}
-                                            size={16}
-                                        />
-                                    }
-                                    onClick={(event: React.MouseEvent) => {
-                                        // The click is the token's, not the
-                                        // text's: it opens a person instead of
-                                        // putting a caret behind them.
-                                        event.stopPropagation();
-                                        openUser?.(mention.userId);
-                                    }}
-                                >
-                                    {segment.text.slice(1)}
-                                </InteractionTagPrimary>
-                            </InteractionTag>
-                        );
-                    })}
-                </div>
-
-                {remaining === undefined ? null : (
-                    <div className={styles.footer}>
-                        <Text className={styles.counter} size={200}>
-                            {strings.charactersLeft(remaining)}
-                        </Text>
-                    </div>
+    const openUser = props.onOpenUser;
+    /**
+     * The people-and-text view of the value, laid over the field.
+     *
+     * Over it, not in place of it: the textarea underneath stays mounted and
+     * goes on being the box this field is. That is the point of the arrangement
+     * — a field somebody dragged taller is the same element before and after
+     * they stop typing in it, so the height they chose is still there when they
+     * come back. Building the field again for each view would throw that away,
+     * and no amount of measuring afterwards could honestly get it back.
+     *
+     * While this is up, the field beneath it is covered, out of the tab order
+     * and hidden from assistive technology: the value is on screen once, and
+     * there is one thing to reach for.
+     */
+    const readOverlay = (
+            <div
+                className={mergeClasses(
+                    styles.reader,
+                    props.disabled ? styles.readerDisabled : undefined
                 )}
+                aria-label={props.label}
+                // Reading is where editing starts, exactly as it does in an
+                // ordinary field: clicking the text puts the caret in it.
+                onClick={() => {
+                    if (!props.disabled) {
+                        beginEditing();
+                    }
+                }}
+                // The same step without a mouse. Enter and Space are what a
+                // field at rest answers to, so a keyboard user reaches the
+                // text the same way and by the same keys.
+                onKeyDown={(event: React.KeyboardEvent) => {
+                    if (props.disabled || (event.key !== "Enter" && event.key !== " ")) {
+                        return;
+                    }
+                    // Space would otherwise scroll the form out from under
+                    // the field it just opened.
+                    event.preventDefault();
+                    beginEditing();
+                }}
+                // A group rather than a textbox: it holds the tokens, which
+                // are reachable in their own right, and it is not itself
+                // something to type into.
+                role="group"
+                tabIndex={props.disabled ? -1 : 0}
+            >
+                {splitTrackedMentions(text, insertedMentions.current).map((segment, index) => {
+                    const mention = segment.mention;
+                    // Not confirmed, not a person: the characters are shown
+                    // as the text they are, and pressing them starts editing
+                    // like any other part of the value.
+                    return mention === undefined || !verified.has(identityKey(mention)) ? (
+                        // Runs have no identity of their own: they are cut
+                        // from the text afresh on every render.
+                        <React.Fragment key={index}>{segment.text}</React.Fragment>
+                    ) : (
+                        <InteractionTag
+                            appearance="brand"
+                            // Two mentions of one person are two runs, and
+                            // only their place tells them apart.
+                            key={index}
+                            shape="circular"
+                            size="extra-small"
+                        >
+                            <InteractionTagPrimary
+                                aria-label={strings.openMentionedUser(
+                                    segment.text.slice(1)
+                                )}
+                                className={styles.token}
+                                disabled={openUser === undefined}
+                                media={
+                                    <Avatar
+                                        // Decorative: the tag already carries the name.
+                                        aria-hidden
+                                        color="colorful"
+                                        name={segment.text.slice(1)}
+                                        size={16}
+                                    />
+                                }
+                                onClick={(event: React.MouseEvent) => {
+                                    // The click is the token's, not the
+                                    // text's: it opens a person instead of
+                                    // putting a caret behind them.
+                                    event.stopPropagation();
+                                    openUser?.(mention.userId);
+                                }}
+                            >
+                                {segment.text.slice(1)}
+                            </InteractionTagPrimary>
+                        </InteractionTag>
+                    );
+                })}
             </div>
-        );
-    }
+    );
 
     const isOpen = trigger !== null && !props.disabled && mayMention && !hasError;
     const isListRendered = isOpen && !(isSearching && suggestions.length === 0);
@@ -1121,43 +1141,57 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
 
     return (
         <div className={styles.root}>
-            <Textarea
-                appearance="outline"
-                className={styles.textarea}
-                disabled={props.disabled}
-                onBlur={handleBlur}
-                onChange={handleChange}
-                onFocus={() => {
-                    isFocused.current = true;
-                    setIsEditing(true);
-                }}
-                onKeyDown={handleKeyDown}
-                placeholder={props.placeholder ?? strings.placeholder}
-                resize="vertical"
-                textarea={{
-                    // The textarea is the combobox input: it owns the popup and names
-                    // the active option, while the list itself carries the options.
-                    "aria-activedescendant": hasListbox ? optionId(activeIndex) : undefined,
-                    "aria-autocomplete": "list",
-                    "aria-controls": hasListbox ? listboxId : undefined,
-                    // Named rather than announced on every keystroke: a live
-                    // region would read the count out after each letter.
-                    "aria-describedby": remaining === undefined ? undefined : counterId,
-                    "aria-expanded": isOpen,
-                    "aria-label": props.label,
-                    maxLength: props.maxLength,
-                    onClick: handleCaretMove,
-                    onKeyUp: handleCaretMove,
-                    ref: setTextarea,
-                    role: "combobox",
-                    // `rows` is what a textarea is normally given, and the
-                    // minimum height is what keeps it that tall once the user is
-                    // allowed to drag the resize handle.
-                    rows: minRows,
-                    style: { minHeight: minFieldHeight },
-                }}
-                value={text}
-            />
+            {/* One box. The textarea is what the field is made of; the read
+                view is laid over it, so a field somebody resized is never
+                taken away and built again. */}
+            <div className={styles.field}>
+                <Textarea
+                    appearance="outline"
+                    className={styles.textarea}
+                    disabled={props.disabled}
+                    onBlur={handleBlur}
+                    onChange={handleChange}
+                    onFocus={() => {
+                        isFocused.current = true;
+                        setIsEditing(true);
+                    }}
+                    onKeyDown={handleKeyDown}
+                    placeholder={props.placeholder ?? strings.placeholder}
+                    resize="vertical"
+                    textarea={{
+                        // The textarea is the combobox input: it owns the popup and names
+                        // the active option, while the list itself carries the options.
+                        "aria-activedescendant": hasListbox ? optionId(activeIndex) : undefined,
+                        "aria-autocomplete": "list",
+                        "aria-controls": hasListbox ? listboxId : undefined,
+                        // Named rather than announced on every keystroke: a live
+                        // region would read the count out after each letter.
+                        "aria-describedby": remaining === undefined ? undefined : counterId,
+                        "aria-expanded": isOpen,
+                        "aria-label": props.label,
+                        maxLength: props.maxLength,
+                        onClick: handleCaretMove,
+                        onKeyUp: handleCaretMove,
+                    // Covered by the read view, and with it out of the way of
+                    // both the Tab key and a screen reader: the value is on
+                    // screen once, and there is one thing to reach for. The
+                    // element itself stays, which is what keeps the box — and
+                    // any height the user dragged it to — from being rebuilt.
+                    "aria-hidden": isReading ? true : undefined,
+                        ref: setTextarea,
+                        role: "combobox",
+                    tabIndex: isReading ? -1 : undefined,
+                        // `rows` is what a textarea is normally given, and the
+                        // minimum height is what keeps it that tall once the user is
+                        // allowed to drag the resize handle.
+                        rows: minRows,
+                        style: { minHeight: minFieldHeight },
+                    }}
+                    value={text}
+                />
+
+                {isReading ? readOverlay : null}
+            </div>
 
             {/* Announced, not offered: never an option in the list. */}
             <div aria-live="polite" className={styles.srOnly} role="status">

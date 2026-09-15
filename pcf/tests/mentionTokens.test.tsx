@@ -210,6 +210,19 @@ function requiredField(): HTMLTextAreaElement {
     return element;
 }
 
+/**
+ * True while the field is the thing being typed in.
+ *
+ * The textarea is no longer torn down to show the people view — it stays
+ * mounted underneath, covered and hidden from assistive technology — so "is
+ * there a textarea" no longer answers "is this field being edited". This does.
+ */
+function isEditing(): boolean {
+    const element = field();
+
+    return element !== null && element.getAttribute("aria-hidden") !== "true";
+}
+
 function reader(): HTMLElement | null {
     return container.querySelector('[role="group"]');
 }
@@ -289,7 +302,7 @@ describe("a saved record with a mention in it", () => {
     it("shows the person as a token, and the rest as text", async () => {
         await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
 
-        expect(field()).toBeNull();
+        expect(isEditing()).toBe(false);
         expect(tokens()).toHaveLength(1);
         expect(tokenAt(0).textContent).toContain("Alex Rivera");
         // The characters around it are still the characters that were saved.
@@ -380,7 +393,7 @@ describe("a saved record with a mention in it", () => {
 
         expect(tokens()).toHaveLength(1);
         enterEditing();
-        expect(field()).toBeNull();
+        expect(isEditing()).toBe(false);
     });
 });
 
@@ -450,7 +463,7 @@ describe("opening the person a mention names", () => {
             Simulate.click(tokenAt(0));
         });
 
-        expect(field()).toBeNull();
+        expect(isEditing()).toBe(false);
         expect(tokens()).toHaveLength(1);
     });
 
@@ -523,7 +536,7 @@ describe("moving between reading and editing", () => {
             Simulate.blur(requiredField());
         });
 
-        expect(field()).toBeNull();
+        expect(isEditing()).toBe(false);
         expect(tokenAt(0).textContent).toContain("Alex Rivera");
         expect(control.getOutputs().field).toBe(SAVED_TEXT);
         expect(control.getOutputs().mentionMetadata).toBe(metadata);
@@ -908,7 +921,7 @@ describe("starting to edit a field that is at rest", () => {
             Simulate.keyDown(surface, { key: "Tab" });
         });
 
-        expect(field()).toBeNull();
+        expect(isEditing()).toBe(false);
     });
 
     it("does not open on a key press when the field is read-only", async () => {
@@ -923,7 +936,7 @@ describe("starting to edit a field that is at rest", () => {
             Simulate.keyDown(surface, { key: "Enter" });
         });
 
-        expect(field()).toBeNull();
+        expect(isEditing()).toBe(false);
     });
 
     it("leaves the field alone when a person is pressed instead", async () => {
@@ -933,7 +946,7 @@ describe("starting to edit a field that is at rest", () => {
             Simulate.click(tokenAt(0));
         });
 
-        expect(field()).toBeNull();
+        expect(isEditing()).toBe(false);
         expect(document.activeElement).not.toBe(field());
     });
 });
