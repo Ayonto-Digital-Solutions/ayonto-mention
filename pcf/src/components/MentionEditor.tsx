@@ -23,6 +23,8 @@ import type { UserSearchProvider, UserSuggestion } from "../domain/userSearch";
 import { useMentionSearch } from "../hooks/useMentionSearch";
 
 export interface MentionEditorStrings {
+    /** Shown in the empty field. Never part of its value. */
+    readonly placeholder: string;
     readonly noResults: string;
     readonly searching: string;
     /** Neutral wording: a lookup failure must never surface the underlying error. */
@@ -43,6 +45,7 @@ export interface MentionEditorStrings {
  * here is customer- or environment-specific.
  */
 export const DEFAULT_MENTION_EDITOR_STRINGS: MentionEditorStrings = {
+    placeholder: "Type @ to mention someone",
     noResults: "No people found",
     searching: "Searching people",
     lookupFailed: "People could not be looked up. Please try again.",
@@ -339,6 +342,20 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
      *    genuine host decision, so keeping them would make a value the editor
      *    once emitted impossible for the host to ever set again.
      */
+    /**
+     * A masked field is not rendered, so nobody can be typing in it.
+     *
+     * Declared before the reconciliation below so the flag is already cleared
+     * when it runs: a host value arriving while the field is masked would
+     * otherwise be parked, waiting for a blur that can never come, and would
+     * still be waiting when the field is shown again.
+     */
+    React.useEffect(() => {
+        if (props.masked === true) {
+            isFocused.current = false;
+        }
+    }, [props.masked]);
+
     React.useEffect(() => {
         if (value === textRef.current) {
             emittedValues.current = new Set<string>([value]);
@@ -348,12 +365,12 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
         if (emittedValues.current.has(value)) {
             return;
         }
-        if (isFocused.current) {
+        if (isFocused.current && props.masked !== true) {
             pendingHostValue.current = value;
             return;
         }
         adoptHostValue(value);
-    }, [adoptHostValue, value]);
+    }, [adoptHostValue, props.masked, value]);
 
     // Puts the caret back after a mention was written into the text.
     React.useEffect(() => {
@@ -641,7 +658,7 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
                     isFocused.current = true;
                 }}
                 onKeyDown={handleKeyDown}
-                placeholder={props.placeholder}
+                placeholder={props.placeholder ?? strings.placeholder}
                 resize="vertical"
                 textarea={{
                     // The textarea is the combobox input: it owns the popup and names

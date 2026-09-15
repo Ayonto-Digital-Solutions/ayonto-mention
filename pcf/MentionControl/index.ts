@@ -406,8 +406,12 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
             // Changing on a record boundary, so React remounts the editor and its
             // mention identities start empty for the new record.
             key: `mention-editor-${this.editorGeneration.toString()}`,
-            // A masked column hands the editor nothing to show.
-            value: masked ? "" : this.current.field,
+            // The value is handed over as it is, masked or not. Masking is how the
+            // field is *shown*, not a change to what it holds: telling the editor
+            // the host value had become empty would make it adopt that emptiness,
+            // reanchor every tracked mention away and report a set of mentions
+            // nobody edited — turning a security setting into a data change.
+            value: this.current.field,
             disabled: disabled || masked,
             masked,
             notice,
@@ -439,6 +443,7 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
         const resources = context.resources;
         const formatting = context.formatting;
         const strings: MentionEditorStrings = (this.strings ??= {
+            placeholder: resources.getString("Editor_Placeholder"),
             noResults: resources.getString("Editor_NoResults"),
             searching: resources.getString("Editor_Searching"),
             lookupFailed: resources.getString("Editor_LookupFailed"),

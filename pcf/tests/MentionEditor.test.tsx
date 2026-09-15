@@ -622,6 +622,7 @@ describe("MentionEditor", () => {
                 placeholder: "Write a comment",
                 listboxId: "second-editor",
                 strings: {
+                    placeholder: "Mit @ jemanden erwaehnen",
                     noResults: "Niemand gefunden",
                     searching: "Suche Personen",
                     lookupFailed: "Personen konnten nicht geladen werden.",

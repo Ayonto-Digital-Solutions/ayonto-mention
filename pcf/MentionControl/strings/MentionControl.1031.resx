@@ -147,6 +147,9 @@
   <data name="MentionMetadata_Desc_Key" xml:space="preserve">
     <value>Ausgeblendete Textspalte (mehrere Zeilen), die die Erwähnungen dieser Textspalte trägt. Pro erwähnungsfähiger Textspalte eine eigene Datenspalte verwenden.</value>
   </data>
+  <data name="Editor_Placeholder" xml:space="preserve">
+    <value>Mit @ jemanden erwähnen</value>
+  </data>
   <data name="Editor_NoResults" xml:space="preserve">
     <value>Keine Personen gefunden</value>
   </data>

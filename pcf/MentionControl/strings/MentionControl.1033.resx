@@ -147,6 +147,9 @@
   <data name="MentionMetadata_Desc_Key" xml:space="preserve">
     <value>Hidden multiple-lines-of-text column that carries the mentions of this text column. Use one metadata column per mention-enabled text column.</value>
   </data>
+  <data name="Editor_Placeholder" xml:space="preserve">
+    <value>Type @ to mention someone</value>
+  </data>
   <data name="Editor_NoResults" xml:space="preserve">
     <value>No people found</value>
   </data>

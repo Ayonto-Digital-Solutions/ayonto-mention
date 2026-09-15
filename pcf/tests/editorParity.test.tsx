@@ -107,6 +107,7 @@ function makeContext(options: HostOptions = {}): ComponentFramework.Context<IInp
 }
 
 let container: HTMLDivElement;
+let notifyCount = 0;
 
 function start(options: HostOptions = {}): {
     control: MentionControl;
@@ -114,7 +115,13 @@ function start(options: HostOptions = {}): {
 } {
     const control = new MentionControl();
     const context = makeContext(options);
-    control.init(context, () => undefined, {});
+    control.init(
+        context,
+        () => {
+            notifyCount += 1;
+        },
+        {}
+    );
     return { control, editor: render(control, context) };
 }
 
@@ -178,6 +185,12 @@ function press(key: string, caret: number, selectionEnd: number = caret): { star
     return { start: element.selectionStart ?? -1, end: element.selectionEnd ?? -1 };
 }
 
+function focusField(): void {
+    act(() => {
+        Simulate.focus(requiredField());
+    });
+}
+
 /** Deletes whatever the field has selected, the way the browser then would. */
 function applyDeletion(): void {
     const element = requiredField();
@@ -191,6 +204,7 @@ beforeEach(() => {
     jest.useFakeTimers();
     container = document.createElement("div");
     document.body.appendChild(container);
+    notifyCount = 0;
     Object.defineProperty(Element.prototype, "scrollIntoView", {
         configurable: true,
         writable: true,
@@ -227,13 +241,16 @@ describe("a column the user may not read", () => {
         expect(container.textContent).toContain(resourceValue("Editor_MaskedValue"));
     });
 
-    it("hands the editor nothing to show", () => {
+    it("is told to mask rather than told the value is gone", () => {
+        // Masking is how the field is shown, not a change to what it holds. The
+        // editor keeps the value it was given — and renders none of it.
         const { editor } = start({ value: SECRET, readable: false });
 
-        expect(editor.value).toBe("");
+        expect(editor.value).toBe(SECRET);
         expect(editor.masked).toBe(true);
         expect(editor.disabled).toBe(true);
         expect(editor.canMention).toBe(false);
+        expect(container.innerHTML).not.toContain("Confidential");
     });
 
     it("keeps the stored metadata exactly as the host holds it", () => {
@@ -253,6 +270,126 @@ describe("a column the user may not read", () => {
         render(control, makeContext({ value: SECRET, readable: true }));
 
         expect(requiredField().value).toBe(SECRET);
+    });
+});
+
+describe("masking a column that is already being edited", () => {
+    interface Payload {
+        readonly mentions: readonly { readonly eventId: string }[];
+    }
+
+    const parse = (control: MentionControl): Payload =>
+        JSON.parse(control.getOutputs().mentionMetadata ?? "") as Payload;
+
+    /**
+     * A record that already had text, into which Alex is then mentioned. The
+     * starting value matters: an editor that opened empty has "" in its own
+     * emitted lineage, which would hide a bug that hands it "" later on.
+     */
+    const OPENING = "Note. ";
+
+    async function pickAlex(control: MentionControl, host: Host): Promise<void> {
+        type(`${OPENING}@Al`);
+        advance(MENTION_SEARCH_DEBOUNCE_MS);
+        await host.settleSearch(0, [{ id: alex.userId, name: alex.name }]);
+        act(() => {
+            Simulate.keyDown(requiredField(), { key: "Enter" });
+        });
+        expect(parse(control).mentions).toHaveLength(1);
+    }
+
+    it("keeps text, metadata and identity across mask and unmask", async () => {
+        const host = makeHost();
+        const control = new MentionControl();
+        const context = makeContext({ webApi: host.webAPI, readable: true, value: OPENING });
+        control.init(
+            context,
+            () => {
+                notifyCount += 1;
+            },
+            {}
+        );
+        render(control, context);
+        await pickAlex(control, host);
+
+        const text = control.getOutputs().field;
+        const metadata = control.getOutputs().mentionMetadata;
+        const eventId = parse(control).mentions[0]?.eventId;
+        expect(text).toBe(`${OPENING}@Alex Rivera `);
+        expect(eventId).toBeDefined();
+
+        // The column becomes unreadable while this instance is live.
+        const beforeMasking = notifyCount;
+        render(control, makeContext({ webApi: host.webAPI, value: text ?? "", readable: false }));
+        await flush();
+
+        expect(field()).toBeNull();
+        expect(container.innerHTML).not.toContain("Alex Rivera");
+        expect(container.textContent).not.toContain("Alex Rivera");
+        // Masking is a way of showing the field, not a change to it.
+        expect(notifyCount).toBe(beforeMasking);
+        expect(control.getOutputs().field).toBe(text);
+        expect(control.getOutputs().mentionMetadata).toBe(metadata);
+
+        // And back again.
+        render(control, makeContext({ webApi: host.webAPI, value: text ?? "", readable: true }));
+        await flush();
+
+        expect(requiredField().value).toBe(`${OPENING}@Alex Rivera `);
+        expect(notifyCount).toBe(beforeMasking);
+        expect(control.getOutputs().field).toBe(text);
+        expect(control.getOutputs().mentionMetadata).toBe(metadata);
+        expect(parse(control).mentions[0]?.eventId).toBe(eventId);
+    });
+
+    it("still deletes the tracked mention whole after unmasking", async () => {
+        const host = makeHost();
+        const control = new MentionControl();
+        const context = makeContext({ webApi: host.webAPI, readable: true, value: OPENING });
+        control.init(context, () => undefined, {});
+        render(control, context);
+        await pickAlex(control, host);
+        const text = control.getOutputs().field;
+
+        render(control, makeContext({ webApi: host.webAPI, value: text ?? "", readable: false }));
+        await flush();
+        render(control, makeContext({ webApi: host.webAPI, value: text ?? "", readable: true }));
+        await flush();
+
+        // The editor still knows which occurrence is a mention.
+        expect(press("Backspace", 18)).toEqual({ start: 6, end: 19 });
+    });
+
+    it("survives being masked while the field has focus", async () => {
+        const host = makeHost();
+        const control = new MentionControl();
+        const context = makeContext({ webApi: host.webAPI, readable: true, value: OPENING });
+        control.init(
+            context,
+            () => {
+                notifyCount += 1;
+            },
+            {}
+        );
+        render(control, context);
+        await pickAlex(control, host);
+        const metadata = control.getOutputs().mentionMetadata;
+        focusField();
+
+        render(control, makeContext({ webApi: host.webAPI, value: "decided elsewhere", readable: false }));
+        await flush();
+        const afterMasking = notifyCount;
+
+        // A value decided elsewhere arrived while the field was masked. There is
+        // nobody typing in a field that is not rendered, so it must not be left
+        // waiting for a blur that can never come.
+        render(control, makeContext({ webApi: host.webAPI, value: "decided elsewhere", readable: true }));
+        await flush();
+
+        expect(requiredField().value).toBe("decided elsewhere");
+        expect(control.getOutputs().field).toBe("decided elsewhere");
+        expect(notifyCount).toBe(afterMasking);
+        expect(control.getOutputs().mentionMetadata).not.toBe(metadata);
     });
 });
 
@@ -456,6 +593,30 @@ describe("deleting a mention", () => {
     });
 });
 
+describe("the placeholder", () => {
+    it("invites the user to mention someone, in their language", () => {
+        start();
+
+        expect(requiredField().getAttribute("placeholder")).toBe(
+            resourceValue("Editor_Placeholder")
+        );
+    });
+
+    it("is never part of the value", () => {
+        const { control } = start();
+
+        expect(control.getOutputs().field).toBe("");
+        expect(requiredField().value).toBe("");
+    });
+
+    it("is not shown in place of a masked value", () => {
+        start({ value: SECRET, readable: false });
+
+        expect(container.textContent).not.toContain(resourceValue("Editor_Placeholder"));
+        expect(container.textContent).toContain(resourceValue("Editor_MaskedValue"));
+    });
+});
+
 describe("the remaining-character count", () => {
     it("is shown when the column has a limit", () => {
         start({ maxLength: 100, value: "12345" });
@@ -496,6 +657,7 @@ describe("the shipped resources", () => {
 
     it("carry every string the editor needs", () => {
         for (const key of [
+            "Editor_Placeholder",
             "Editor_NoResults",
             "Editor_Searching",
             "Editor_LookupFailed",
@@ -539,6 +701,7 @@ describe("the shipped resources", () => {
 
     it("are actually translated, not copied", () => {
         const translated = [
+            "Editor_Placeholder",
             "Editor_NoResults",
             "Editor_Searching",
             "Editor_LookupFailed",
