@@ -622,12 +622,16 @@ describe("MentionEditor", () => {
                 placeholder: "Write a comment",
                 listboxId: "second-editor",
                 strings: {
+                    placeholder: "Mit @ jemanden erwaehnen",
                     noResults: "Niemand gefunden",
                     searching: "Suche Personen",
                     lookupFailed: "Personen konnten nicht geladen werden.",
                     mentionTooLong: "Die Erwaehnung passt nicht mehr.",
                     moreResults: "Weitere Treffer vorhanden.",
                     suggestionsAvailable: (count) => `${count.toString()} Vorschlaege`,
+                    maskedValue: "* * *",
+                    offlineNotice: "Keine Verbindung.",
+                    charactersLeft: (remaining) => `${remaining.toString()} Zeichen uebrig`,
                 },
             })
         );

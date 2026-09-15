@@ -7,6 +7,7 @@ import type { IInputs } from "../MentionControl/generated/ManifestTypes";
 import type { MentionEditorProps } from "../src/components/MentionEditor";
 import type { MentionRecordContext } from "../src/domain/recordContext";
 import { MENTION_SEARCH_DEBOUNCE_MS } from "../src/hooks/useMentionSearch";
+import { resourceValue } from "./support/resources";
 
 interface HostOptions {
     readonly value?: string | null;
@@ -21,6 +22,12 @@ interface HostOptions {
     readonly logicalName?: string | null;
     /** Omits the field metadata entirely, as a host may do. */
     readonly withoutAttributes?: boolean;
+    /** The host reports the client as offline. */
+    readonly offline?: boolean;
+    /** The host reports no network. */
+    readonly networkAvailable?: boolean;
+    /** The host says the bound column may not be read. */
+    readonly readable?: boolean;
     /** What the host holds in the companion column. */
     readonly metadata?: string;
     /** Set when the host states whether the companion column may be written. */
@@ -61,9 +68,13 @@ function makeContext(options: HostOptions = {}): ComponentFramework.Context<IInp
                                       : options.logicalName,
                           },
                 security:
-                    options.editable === undefined
+                    options.editable === undefined && options.readable === undefined
                         ? undefined
-                        : { editable: options.editable, readable: true, secured: false },
+                        : {
+                              editable: options.editable ?? true,
+                              readable: options.readable ?? true,
+                              secured: false,
+                          },
             },
             recordId: { raw: options.recordId === undefined ? "" : options.recordId },
             recordTable: {
@@ -81,6 +92,15 @@ function makeContext(options: HostOptions = {}): ComponentFramework.Context<IInp
             isControlDisabled: options.disabled ?? false,
             label: options.label ?? "Comment",
         },
+        client: {
+            disableScroll: false,
+            getClient: () => "Web",
+            getFormFactor: () => 1,
+            isOffline: () => options.offline === true,
+            isNetworkAvailable: () => options.networkAvailable !== false,
+        },
+        resources: { getString: (id: string) => resourceValue(id) },
+        formatting: { formatInteger: (value: number) => value.toString() },
         webAPI: options.webApi ?? makeWebApi(),
     } as unknown as ComponentFramework.Context<IInputs>;
 }

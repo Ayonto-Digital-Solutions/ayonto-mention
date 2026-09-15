@@ -2,7 +2,10 @@ import * as React from "react";
 
 import { IInputs, IOutputs } from "./generated/ManifestTypes";
 import { MentionEditor } from "../src/components/MentionEditor";
-import type { MentionEditorState } from "../src/components/MentionEditor";
+import type {
+    MentionEditorState,
+    MentionEditorStrings,
+} from "../src/components/MentionEditor";
 import { DataverseUserSearchService } from "../src/services/dataverseUserSearchService";
 import { createEventId } from "../src/services/eventId";
 import { MentionEpisodeTracker } from "../src/domain/mentionEpisodes";
@@ -25,6 +28,11 @@ interface OutputPair {
 }
 
 const EMPTY_PAIR: OutputPair = { field: "", metadata: "" };
+
+/** Puts one value into a resource string that carries a `{0}` placeholder. */
+function interpolate(template: string, value: string): string {
+    return template.replace("{0}", value);
+}
 
 /**
  * Gives every control instance its own ARIA ids, so two editors on one form
@@ -119,6 +127,11 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
      * for the adapter's benefit.
      */
     private editorGeneration = 0;
+    /**
+     * The localized strings the editor shows. Resource lookups do not change
+     * over the life of a control instance, so they are read once.
+     */
+    private strings: MentionEditorStrings | undefined;
 
     constructor() {
         instanceCount += 1;
@@ -373,26 +386,85 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
         // A column the user may not write to is read-only even when the form as a
         // whole is editable.
         const disabled = context.mode.isControlDisabled || field.security?.editable === false;
+        // A column the user may not read shows nothing at all. The value stays in
+        // this control's own state and is still reported back unchanged by
+        // `getOutputs`; it simply never reaches the editor, and therefore never
+        // reaches the DOM.
+        const masked = field.security?.readable === false;
         // A mention has to be recorded somewhere to mean anything later. Where
         // the host will not accept the companion value, the safe answer is to
         // offer nobody rather than to create an identity that is silently lost.
         this.mentionsAllowed = metadata.security?.editable !== false;
+        // Without a connection the user lookup cannot run, so the picker stays
+        // shut and says why. Typing is untouched: an offline field is still a
+        // field. The platform is asked, never the browser — `navigator.onLine`
+        // reports a network interface, not whether Dataverse can be reached.
+        const notice = this.isOffline(context) ? this.getStrings(context).offlineNotice : undefined;
         const hostLabel = context.mode.label;
 
         return React.createElement(MentionEditor, {
             // Changing on a record boundary, so React remounts the editor and its
             // mention identities start empty for the new record.
             key: `mention-editor-${this.editorGeneration.toString()}`,
+            // The value is handed over as it is, masked or not. Masking is how the
+            // field is *shown*, not a change to what it holds: telling the editor
+            // the host value had become empty would make it adopt that emptiness,
+            // reanchor every tracked mention away and report a set of mentions
+            // nobody edited — turning a security setting into a data change.
             value: this.current.field,
-            disabled,
-            canMention: this.mentionsAllowed,
+            disabled: disabled || masked,
+            masked,
+            notice,
+            canMention: this.mentionsAllowed && !masked && notice === undefined,
             maxLength: field.attributes?.MaxLength,
             label: hostLabel.trim().length > 0 ? hostLabel : FALLBACK_LABEL,
             listboxId: this.listboxId,
+            strings: this.getStrings(context),
             userSearchProvider: this.userSearch,
             onLocalEdit: this.handleLocalEdit,
             onHostValueAdopted: this.handleHostValueAdopted,
         });
+    }
+
+    /**
+     * True when Dataverse cannot be reached.
+     *
+     * Both methods are documented for model-driven apps only, and a host that
+     * does not implement them simply does not answer — which is treated as
+     * "not known to be offline" rather than as an error.
+     */
+    private isOffline(context: ComponentFramework.Context<IInputs>): boolean {
+        const client: Partial<ComponentFramework.Client> = context.client;
+        return client.isOffline?.() === true || client.isNetworkAvailable?.() === false;
+    }
+
+    /** The localized strings for the editor, read from the control's resources. */
+    private getStrings(context: ComponentFramework.Context<IInputs>): MentionEditorStrings {
+        const resources = context.resources;
+        const formatting = context.formatting;
+        const strings: MentionEditorStrings = (this.strings ??= {
+            placeholder: resources.getString("Editor_Placeholder"),
+            noResults: resources.getString("Editor_NoResults"),
+            searching: resources.getString("Editor_Searching"),
+            lookupFailed: resources.getString("Editor_LookupFailed"),
+            mentionTooLong: resources.getString("Editor_MentionTooLong"),
+            moreResults: resources.getString("Editor_MoreResults"),
+            maskedValue: resources.getString("Editor_MaskedValue"),
+            offlineNotice: resources.getString("Editor_OfflineNotice"),
+            suggestionsAvailable: (count: number) =>
+                interpolate(
+                    resources.getString(
+                        count === 1 ? "Editor_SuggestionCountOne" : "Editor_SuggestionCount"
+                    ),
+                    formatting.formatInteger(count)
+                ),
+            charactersLeft: (remaining: number) =>
+                interpolate(
+                    resources.getString("Editor_CharactersLeft"),
+                    formatting.formatInteger(remaining)
+                ),
+        });
+        return strings;
     }
 
     /**

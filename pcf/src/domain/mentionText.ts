@@ -112,6 +112,61 @@ export interface InsertedMention {
     readonly userId: string;
 }
 
+/** A stretch of text, from `start` up to but not including `end`. */
+export interface TextSpan {
+    readonly start: number;
+    readonly end: number;
+}
+
+/** Where a mention stands in the text: the "@" and the name that follows it. */
+export function mentionSpan(mention: InsertedMention): TextSpan {
+    return { start: mention.start, end: mention.start + mention.name.length + 1 };
+}
+
+/**
+ * What a Backspace or a Delete should take when the caret is at a mention: the
+ * whole name, instead of the one character next to the caret. Returns null
+ * everywhere else, and the key then keeps its ordinary meaning.
+ *
+ * A mention is one thing to whoever reads it. "@Alex Rivera" names a person,
+ * "@Alex Rive" names nobody — so taking one letter out of it does not leave half
+ * a mention, it leaves text that still looks like one while the person it stood
+ * for has already dropped out. Whoever starts deleting a name means the name.
+ *
+ * Only mentions this editor is tracking count. A name somebody typed by hand is
+ * ordinary text and deletes one character at a time, because nothing ever said
+ * it was meant as a mention.
+ *
+ * The two directions are the halves a text field works on: `backward` is
+ * Backspace and reaches the mention ending at the caret, `forward` is Delete and
+ * reaches the one starting there. A caret inside a mention is reached by both.
+ */
+export function mentionDeletionRange(
+    text: string,
+    caret: number,
+    direction: "backward" | "forward",
+    mentions: readonly InsertedMention[]
+): TextSpan | null {
+    const span = mentions
+        .map(mentionSpan)
+        .find((candidate) =>
+            direction === "backward"
+                ? caret > candidate.start && caret <= candidate.end
+                : caret >= candidate.start && caret < candidate.end
+        );
+    if (span === undefined) {
+        return null;
+    }
+
+    // A mention standing in a sentence has a space on either side of it. Leaving
+    // both behind would put a double space where the name was, so the one behind
+    // the mention goes with it.
+    const takesFollowingSpace =
+        span.start > 0 && text[span.start - 1] === " " && text[span.end] === " ";
+
+    return { start: span.start, end: takesFollowingSpace ? span.end + 1 : span.end };
+}
+
 /** True when "@name" stands at exactly this position and ends where a mention may end. */
 function readsAsMention(text: string, at: number, name: string): boolean {
     if (!text.startsWith(`@${name}`, at)) {

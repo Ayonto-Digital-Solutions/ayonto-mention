@@ -7,6 +7,7 @@ import type { IInputs, IOutputs } from "../MentionControl/generated/ManifestType
 import type { MentionEditorProps } from "../src/components/MentionEditor";
 import type { MentionOccurrence } from "../src/domain/mentionLifecycle";
 import { MENTION_SEARCH_DEBOUNCE_MS } from "../src/hooks/useMentionSearch";
+import { resourceValue } from "./support/resources";
 
 const RECORD_A = "aaaaaaaa-1111-2222-3333-444444444444";
 const RECORD_B = "bbbbbbbb-5555-6666-7777-888888888888";
@@ -86,6 +87,14 @@ interface HostOptions {
     readonly value?: string;
     readonly metadata?: string | null;
     readonly metadataEditable?: boolean;
+    /** The host reports the client as offline. */
+    readonly offline?: boolean;
+    /** The host reports no network. */
+    readonly networkAvailable?: boolean;
+    /** The host says the bound column may not be read. */
+    readonly readable?: boolean;
+    /** The column's maximum length, when the host reports one. */
+    readonly maxLength?: number;
     readonly recordId?: string;
     readonly recordTable?: string;
     readonly logicalName?: string;
@@ -98,9 +107,13 @@ function makeContext(options: HostOptions = {}): ComponentFramework.Context<IInp
             field: {
                 raw: options.value ?? "",
                 attributes: {
-                    MaxLength: undefined,
+                    MaxLength: options.maxLength,
                     LogicalName: options.logicalName ?? "description",
                 },
+                security:
+                    options.readable === undefined
+                        ? undefined
+                        : { editable: true, readable: options.readable, secured: false },
             },
             recordId: { raw: options.recordId ?? RECORD_A },
             recordTable: { raw: options.recordTable ?? "account" },
@@ -114,6 +127,15 @@ function makeContext(options: HostOptions = {}): ComponentFramework.Context<IInp
             },
         },
         mode: { isControlDisabled: false, label: "Comment" },
+        client: {
+            disableScroll: false,
+            getClient: () => "Web",
+            getFormFactor: () => 1,
+            isOffline: () => options.offline === true,
+            isNetworkAvailable: () => options.networkAvailable !== false,
+        },
+        resources: { getString: (id: string) => resourceValue(id) },
+        formatting: { formatInteger: (value: number) => value.toString() },
         webAPI: options.webApi ?? makeHost().webAPI,
     } as unknown as ComponentFramework.Context<IInputs>;
 }
