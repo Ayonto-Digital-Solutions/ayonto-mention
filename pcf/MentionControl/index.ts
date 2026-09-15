@@ -9,11 +9,17 @@ import type {
 import { DataverseUserSearchService } from "../src/services/dataverseUserSearchService";
 import { createEventId } from "../src/services/eventId";
 import { MentionEpisodeTracker } from "../src/domain/mentionEpisodes";
+import { hydratePersistedMentions } from "../src/domain/mentionHydration";
 import type { MentionOccurrence } from "../src/domain/mentionLifecycle";
 import { serializeMentionMetadata } from "../src/domain/mentionMetadata";
-import { resolveRecordContext, sameRecordContext } from "../src/domain/recordContext";
+import {
+    isDataverseId,
+    normalizeDataverseId,
+    resolveRecordContext,
+    sameRecordContext,
+} from "../src/domain/recordContext";
 import type { MentionRecordContext } from "../src/domain/recordContext";
-import type { UserSearchProvider } from "../src/domain/userSearch";
+import type { UserDirectory, UserSearchProvider } from "../src/domain/userSearch";
 
 /** Accessible name used when the host supplies no column label. */
 const FALLBACK_LABEL = "Ayonto Mention";
@@ -22,6 +28,21 @@ const FALLBACK_LABEL = "Ayonto Mention";
  * One output of this control: the text and the mentions made in it, which are
  * two halves of a single editor state and are reconciled as one.
  */
+/**
+ * What one `updateView` turned out to be, from the control's point of view.
+ *
+ * The distinction matters because only one of the four says anything new about
+ * *who* is mentioned. `unchanged` is the ordinary case by far — the framework
+ * re-renders a control for all sorts of reasons, and the pair it reports is
+ * usually the very pair already accepted. An acknowledgement is this control's
+ * own state coming back; an echo is a value the user has already moved past.
+ * None of those is a reason to read identities out of the payload again — doing
+ * so on an acknowledgement would replace the session's live mentions with a
+ * re-reading of its own output on every keystroke. Only a pair somebody else
+ * decided is new, and that one has to be taken up whole.
+ */
+type ReconcileVerdict = "unchanged" | "acknowledged" | "echo" | "external";
+
 interface OutputPair {
     readonly field: string;
     readonly metadata: string;
@@ -58,7 +79,7 @@ let instanceCount = 0;
  */
 export class MentionControl implements ComponentFramework.ReactControl<IInputs, IOutputs> {
     private notifyOutputChanged: () => void;
-    private userSearch: UserSearchProvider;
+    private userSearch: UserSearchProvider & UserDirectory;
     private readonly listboxId: string;
 
     /**
@@ -132,6 +153,28 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
      * over the life of a control instance, so they are read once.
      */
     private strings: MentionEditorStrings | undefined;
+    /**
+     * The mentions the record already carried, handed to the editor together
+     * with the text they belong to. Re-read only when an authoritative pair
+     * arrives: re-reading it on an ordinary `updateView` would talk over what
+     * the user has done since.
+     */
+    private hydrated: readonly MentionOccurrence[] = [];
+    /**
+     * Names the authoritative pair the editor was last given. Bumped only where
+     * a pair is taken up whole, which is the only thing that can change who a
+     * mention means.
+     *
+     * The text alone cannot carry that news. The same record can be saved again
+     * with the same words and a different person behind them — two people share
+     * a display name often enough that "@Robin Fox" says nothing about which
+     * Robin Fox — and an editor watching only the text string would keep the
+     * identity it already had, show a token for the wrong person, and write that
+     * person back on the next edit.
+     */
+    private hostRevision = 0;
+    /** Opens the person a mention names. Replaced on every update view. */
+    private navigation: ComponentFramework.Navigation;
 
     constructor() {
         instanceCount += 1;
@@ -154,10 +197,17 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
         // API. It looks up people; nothing else here reads or writes Dataverse.
         this.userSearch = new DataverseUserSearchService(context.webAPI);
 
-        this.acceptPair({
+        this.navigation = context.navigation;
+        this.sourceField = (context.parameters.field.attributes?.LogicalName ?? "")
+            .trim()
+            .toLowerCase();
+
+        const opened: OutputPair = {
             field: context.parameters.field.raw ?? "",
             metadata: context.parameters.mentionMetadata.raw ?? "",
-        });
+        };
+        this.acceptPair(opened);
+        this.hydrate(opened);
     }
 
     /**
@@ -233,37 +283,44 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
      * user's hands is the worse failure. Once the cycle closes, the same value
      * is accepted normally.
      */
-    private reconcile(host: OutputPair): void {
+    private reconcile(host: OutputPair): ReconcileVerdict {
         const pending = this.pending;
         if (pending === null) {
-            // No cycle open: the host is authoritative.
+            // No cycle open: the host is authoritative. But the pair already
+            // accepted is not news about anything, and treating every render as
+            // a fresh decision would re-read the payload — and with it every
+            // identity — over and over for nothing.
+            if (host.field === this.accepted.field && host.metadata === this.accepted.metadata) {
+                return "unchanged";
+            }
             this.acceptPair(host);
-            return;
+            return "external";
         }
 
         if (host.field === pending.field && host.metadata === pending.metadata) {
             // 1: the whole output came back.
             this.acceptPair(pending);
-            return;
+            return "acknowledged";
         }
 
         if (host.field === pending.field) {
             // 2: one half of it came back.
-            return;
+            return "echo";
         }
 
         if (host.field === this.accepted.field) {
             // 3: the text this cycle started from.
-            return;
+            return "echo";
         }
 
         if (this.emittedFieldsInCycle.has(host.field)) {
             // 4: a text from earlier in this cycle.
-            return;
+            return "echo";
         }
 
         // 5: a genuinely external text closes the cycle.
         this.acceptPair(host);
+        return "external";
     }
 
     /**
@@ -334,11 +391,52 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
         const crossedBoundary = previous !== null && !sameRecordContext(previous, next);
         if (crossedBoundary) {
             this.episodes.reset();
+            this.hydrated = [];
             this.editorGeneration += 1;
         }
 
         return crossedBoundary;
     }
+
+    /**
+     * Takes up the mentions a saved record already carried.
+     *
+     * The payload is read exactly once per record, against the text and the
+     * column it was written for, and only what survives that check becomes a
+     * mention. The identifiers come with it, so reopening a record continues the
+     * notifications it already had instead of starting new ones — and nothing is
+     * written back: taking a record up is not editing it.
+     */
+    private hydrate(pair: OutputPair): void {
+        const { mentions, episodes } = hydratePersistedMentions(
+            pair.metadata,
+            this.sourceField,
+            pair.field
+        );
+        this.hydrated = mentions;
+        this.episodes.adopt(episodes);
+        // Text and identities are one state, and this is the moment it changes.
+        this.hostRevision += 1;
+    }
+
+    /**
+     * Opens the Dataverse user a mention names, through the framework's own
+     * navigation. A failure is consumed: it can carry the environment URL with
+     * it, the text is still perfectly readable, and there is nothing the person
+     * reading it could do about it anyway.
+     */
+    private readonly handleOpenUser = (userId: string): void => {
+        const entityId = normalizeDataverseId(userId);
+        // Last check before the platform is asked to go somewhere. Nothing that
+        // is not a record id is worth a navigation, and the editor is not the
+        // only thing that could ever hand one over.
+        if (!isDataverseId(entityId)) {
+            return;
+        }
+
+        void this.navigation.openForm({ entityName: "systemuser", entityId })
+            .catch(() => undefined);
+    };
 
     /**
      * Called whenever a value in the property bag changes.
@@ -379,9 +477,20 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
             // that is no longer open. The payload of the record now open comes
             // with it, and this session has made no mentions on it yet.
             this.acceptPair(host);
-        } else {
-            this.reconcile(host);
+            // Another record, another set of mentions to take up.
+            this.hydrate(host);
+        } else if (this.reconcile(host) === "external") {
+            // Somebody else decided this record's pair, and the payload beside
+            // the text describes *that* text. Reading it here, in the same step
+            // that accepted it, is what keeps the two halves one state: the
+            // editor is never handed one save's words with another save's people
+            // attached to them. That holds when only the payload changed, too —
+            // the same sentence can be saved again meaning a different person.
+            // An acknowledgement, a late echo and a pair already accepted change
+            // nothing, so none of them disturbs what the session is holding.
+            this.hydrate(this.current);
         }
+        this.navigation = context.navigation;
 
         // A column the user may not write to is read-only even when the form as a
         // whole is editable.
@@ -399,7 +508,8 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
         // shut and says why. Typing is untouched: an offline field is still a
         // field. The platform is asked, never the browser — `navigator.onLine`
         // reports a network interface, not whether Dataverse can be reached.
-        const notice = this.isOffline(context) ? this.getStrings(context).offlineNotice : undefined;
+        const offline = this.isOffline(context);
+        const notice = offline ? this.getStrings(context).offlineNotice : undefined;
         const hostLabel = context.mode.label;
 
         return React.createElement(MentionEditor, {
@@ -421,8 +531,18 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
             listboxId: this.listboxId,
             strings: this.getStrings(context),
             userSearchProvider: this.userSearch,
+            userDirectory: this.userSearch,
+            // Asked of the platform, not read back out of a message shown to the
+            // user: a localized sentence is for reading, not for deciding with.
+            // Offline, a recorded mention simply reads as text — the record is
+            // not touched, and the question is put again once there is somewhere
+            // to put it.
+            canVerifyPersistedMentions: !offline,
+            initialMentions: this.hydrated,
+            hostRevision: this.hostRevision,
             onLocalEdit: this.handleLocalEdit,
             onHostValueAdopted: this.handleHostValueAdopted,
+            onOpenUser: this.handleOpenUser,
         });
     }
 
@@ -451,6 +571,8 @@ export class MentionControl implements ComponentFramework.ReactControl<IInputs, 
             moreResults: resources.getString("Editor_MoreResults"),
             maskedValue: resources.getString("Editor_MaskedValue"),
             offlineNotice: resources.getString("Editor_OfflineNotice"),
+            openMentionedUser: (name: string) =>
+                interpolate(resources.getString("Editor_OpenMentionedUser"), name),
             suggestionsAvailable: (count: number) =>
                 interpolate(
                     resources.getString(

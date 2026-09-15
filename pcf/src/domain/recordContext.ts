@@ -47,6 +47,24 @@ export function normalizeDataverseId(value: string): string {
     return unwrapped.trim().toLowerCase();
 }
 
+/** The shape of a Dataverse record id, once braces and case are normalized away. */
+const RECORD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * True when a value really is a Dataverse record id.
+ *
+ * For ids that did *not* come from the platform. The record this control is
+ * bound to is taken as given — see `normalizeDataverseId` — but a recipient read
+ * out of a stored payload is something a stranger may have written, and it ends
+ * up in a Web API call and in a navigation. Both should be handed an id or
+ * nothing at all.
+ *
+ * @param value An already normalized id.
+ */
+export function isDataverseId(value: string): boolean {
+    return RECORD_ID.test(value);
+}
+
 /** Logical names are case-insensitive in Dataverse and are compared as lower case. */
 function normalizeLogicalName(value: string): string {
     return value.trim().toLowerCase();

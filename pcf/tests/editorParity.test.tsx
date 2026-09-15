@@ -185,6 +185,22 @@ function press(key: string, caret: number, selectionEnd: number = caret): { star
     return { start: element.selectionStart ?? -1, end: element.selectionEnd ?? -1 };
 }
 
+/** The read-mode surface, when the field is showing its mentions as people. */
+function reader(): HTMLElement | null {
+    return container.querySelector('[role="group"]');
+}
+
+/** Clicks the read-mode text, the way a user starts editing. */
+function enterEditing(): void {
+    const surface = reader();
+    if (surface === null) {
+        throw new Error("the field is not in read mode");
+    }
+    act(() => {
+        Simulate.click(surface);
+    });
+}
+
 function focusField(): void {
     act(() => {
         Simulate.focus(requiredField());
@@ -335,6 +351,11 @@ describe("masking a column that is already being edited", () => {
         render(control, makeContext({ webApi: host.webAPI, value: text ?? "", readable: true }));
         await flush();
 
+        // At rest with a mention in it, the field reads as people rather than as
+        // the characters that spell them.
+        expect(field()).toBeNull();
+        expect(reader()?.textContent).toContain("Alex Rivera");
+        enterEditing();
         expect(requiredField().value).toBe(`${OPENING}@Alex Rivera `);
         expect(notifyCount).toBe(beforeMasking);
         expect(control.getOutputs().field).toBe(text);
@@ -355,6 +376,7 @@ describe("masking a column that is already being edited", () => {
         await flush();
         render(control, makeContext({ webApi: host.webAPI, value: text ?? "", readable: true }));
         await flush();
+        enterEditing();
 
         // The editor still knows which occurrence is a mention.
         expect(press("Backspace", 18)).toEqual({ start: 6, end: 19 });

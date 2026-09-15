@@ -4,6 +4,7 @@ import {
     findMentionTrigger,
     reanchorMentions,
     splitMentions,
+    splitTrackedMentions,
 } from "../src/domain/mentionText";
 import type { MentionTrigger } from "../src/domain/mentionText";
 
@@ -219,6 +220,69 @@ describe("reanchorMentions", () => {
         );
 
         expect(anchored).toEqual([{ start: 6, name: "Robin Fox", userId: "id-a" }]);
+    });
+});
+
+describe("splitTrackedMentions", () => {
+    const alex = { start: 6, name: "Alex Rivera", userId: "u-alex" };
+    const text = "Hello @Alex Rivera today";
+
+    it("cuts the text into the runs a reader sees", () => {
+        expect(splitTrackedMentions(text, [alex])).toEqual([
+            { text: "Hello " },
+            { text: "@Alex Rivera", mention: alex },
+            { text: " today" },
+        ]);
+    });
+
+    it("gives back every character, in order", () => {
+        const joined = splitTrackedMentions(text, [alex])
+            .map((segment) => segment.text)
+            .join("");
+
+        expect(joined).toBe(text);
+    });
+
+    it("keeps line breaks and runs of spaces", () => {
+        const laid = "one\n\n  @Alex Rivera  two";
+        const segments = splitTrackedMentions(laid, [{ ...alex, start: 7 }]);
+
+        expect(segments.map((segment) => segment.text).join("")).toBe(laid);
+        expect(segments[0]?.text).toBe("one\n\n  ");
+    });
+
+    it("ends with the mention when the text does", () => {
+        expect(splitTrackedMentions("Hi @Alex Rivera", [{ ...alex, start: 3 }])).toEqual([
+            { text: "Hi " },
+            { text: "@Alex Rivera", mention: { ...alex, start: 3 } },
+        ]);
+    });
+
+    it("leaves text without tracked mentions in one piece", () => {
+        expect(splitTrackedMentions(text, [])).toEqual([{ text }]);
+    });
+
+    it("keeps two mentions of one person apart", () => {
+        const twice = "@Alex Rivera and @Alex Rivera ";
+        const segments = splitTrackedMentions(twice, [
+            { ...alex, start: 0 },
+            { ...alex, start: 17 },
+        ]);
+
+        expect(segments.filter((segment) => segment.mention !== undefined)).toHaveLength(2);
+        expect(segments.map((segment) => segment.text).join("")).toBe(twice);
+    });
+
+    it("draws nothing over a mention the text no longer supports", () => {
+        // Points past the end of the text it was recorded against.
+        expect(splitTrackedMentions("short", [alex])).toEqual([{ text: "short" }]);
+    });
+
+    it("draws only the first of two mentions reaching for the same place", () => {
+        const segments = splitTrackedMentions(text, [alex, { ...alex, start: 8 }]);
+
+        expect(segments.filter((segment) => segment.mention !== undefined)).toHaveLength(1);
+        expect(segments.map((segment) => segment.text).join("")).toBe(text);
     });
 });
 

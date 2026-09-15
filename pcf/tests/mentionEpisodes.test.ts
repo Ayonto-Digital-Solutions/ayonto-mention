@@ -27,20 +27,138 @@ const ids = (events: readonly { eventId: string }[]): readonly string[] =>
 
 describe("MentionEpisodeTracker", () => {
     it("gives a person mentioned for the first time one notification", () => {
-        // The identifier and the person, and nothing else. The name and the
+        // The identifier, the person, and where they stand. The name and the
         // address the suggestion carried stay in the editor.
         expect(tracker().update([alex])).toEqual([
-            { eventId: "event-1", recipientUserId: "u-alex" },
+            {
+                eventId: "event-1",
+                recipientUserId: "u-alex",
+                occurrences: [{ start: 0, length: 12 }],
+            },
         ]);
     });
 
-    it("reports nothing about a person but who they are", () => {
+    it("reports nothing about a person but who and where they are", () => {
         const events = tracker().update([alex, dana]);
 
         expect(events.map((event) => Object.keys(event).sort())).toEqual([
-            ["eventId", "recipientUserId"],
-            ["eventId", "recipientUserId"],
+            ["eventId", "occurrences", "recipientUserId"],
+            ["eventId", "occurrences", "recipientUserId"],
         ]);
+    });
+
+    it("gathers every place one person is mentioned under one notification", () => {
+        const events = tracker().update([alex, { ...alex, start: 40 }]);
+
+        expect(events).toEqual([
+            {
+                eventId: "event-1",
+                recipientUserId: "u-alex",
+                occurrences: [
+                    { start: 0, length: 12 },
+                    { start: 40, length: 12 },
+                ],
+            },
+        ]);
+    });
+
+    it("keeps the identifier when an occurrence only moves", () => {
+        const episodes = tracker();
+        episodes.update([alex]);
+
+        const moved = episodes.update([{ ...alex, start: 25 }]);
+
+        expect(moved).toEqual([
+            {
+                eventId: "event-1",
+                recipientUserId: "u-alex",
+                occurrences: [{ start: 25, length: 12 }],
+            },
+        ]);
+    });
+
+    it("drops the occurrence that went and keeps the one that stayed", () => {
+        const episodes = tracker();
+        episodes.update([alex, { ...alex, start: 40 }]);
+
+        const remaining = episodes.update([{ ...alex, start: 40 }]);
+
+        expect(remaining[0]?.eventId).toBe("event-1");
+        expect(remaining[0]?.occurrences).toEqual([{ start: 40, length: 12 }]);
+    });
+
+    it("takes up the episodes a saved record carried", () => {
+        const episodes = tracker();
+
+        episodes.adopt(new Map([["u-alex", "event-from-the-record"]]));
+
+        expect(episodes.update([alex])).toEqual([
+            {
+                eventId: "event-from-the-record",
+                recipientUserId: "u-alex",
+                occurrences: [{ start: 0, length: 12 }],
+            },
+        ]);
+    });
+
+    it("replaces the episodes it was holding, rather than adding to them", () => {
+        // The same record, saved again by somebody else, with a different person
+        // at the same place. Two people share a display name often enough that
+        // this is ordinary, not exotic.
+        const episodes = tracker();
+        episodes.adopt(new Map([["u-robin-a", "event-a"]]));
+        episodes.update([{ start: 11, name: "Robin Fox", userId: "u-robin-a" }]);
+
+        episodes.adopt(new Map([["u-robin-b", "event-b"]]));
+
+        expect(episodes.events().map((event) => event.recipientUserId)).toEqual(["u-robin-b"]);
+        expect(episodes.events().map((event) => event.eventId)).toEqual(["event-b"]);
+    });
+
+    it("does not let a replaced person carry their old identifier back", () => {
+        const episodes = tracker();
+        episodes.adopt(new Map([["u-robin-a", "event-a"]]));
+        episodes.update([{ start: 11, name: "Robin Fox", userId: "u-robin-a" }]);
+
+        episodes.adopt(new Map([["u-robin-b", "event-b"]]));
+        // Whoever wrote the record last did not mean this person, so being
+        // mentioned again is a new thing to tell them about, with a new
+        // identifier — not a continuation of an episode nobody else knows about.
+        const written = episodes.update([
+            { start: 11, name: "Robin Fox", userId: "u-robin-b" },
+            { start: 30, name: "Robin Fox", userId: "u-robin-a" },
+        ]);
+
+        expect(written).toEqual([
+            {
+                eventId: "event-b",
+                recipientUserId: "u-robin-b",
+                occurrences: [{ start: 11, length: 10 }],
+            },
+            {
+                eventId: "event-1",
+                recipientUserId: "u-robin-a",
+                occurrences: [{ start: 30, length: 10 }],
+            },
+        ]);
+    });
+
+    it("empties itself when the record turns out to carry nobody", () => {
+        const episodes = tracker();
+        episodes.adopt(new Map([["u-alex", "event-from-the-record"]]));
+
+        episodes.adopt(new Map());
+
+        expect(episodes.events()).toEqual([]);
+        // And the same person mentioned again is a new episode, not the old one.
+        expect(ids(episodes.update([alex]))).toEqual(["event-1"]);
+    });
+
+    it("starts a new episode for somebody the record never carried", () => {
+        const episodes = tracker();
+        episodes.adopt(new Map([["u-alex", "event-from-the-record"]]));
+
+        expect(episodes.update([dana])[0]?.eventId).toBe("event-1");
     });
 
     it("keeps the identifier while the mention only moves", () => {
@@ -116,13 +234,13 @@ describe("MentionEpisodeTracker", () => {
         // order a caller happened to build the array in.
         const events = tracker().update([dana, alex]);
 
-        expect(events).toEqual([
-            { eventId: "event-1", recipientUserId: "u-alex" },
-            { eventId: "event-2", recipientUserId: "u-dana" },
+        expect(events.map((event) => [event.eventId, event.recipientUserId])).toEqual([
+            ["event-1", "u-alex"],
+            ["event-2", "u-dana"],
         ]);
     });
 
-    it("reports the same thing however the person is written", () => {
+    it("says nothing about a person but who they are, however they are written", () => {
         const episodes = tracker();
         const before = episodes.update([alex]);
 
@@ -130,7 +248,16 @@ describe("MentionEpisodeTracker", () => {
             { ...alex, name: "A. Rivera", email: "somewhere.else@example.invalid" },
         ]);
 
-        expect(renamed).toEqual(before);
+        // Same notification, same person. Only the span follows the text: it
+        // covers the name, so a shorter name is a shorter span.
+        expect(renamed[0]?.eventId).toBe(before[0]?.eventId);
+        expect(renamed[0]?.recipientUserId).toBe("u-alex");
+        expect(renamed[0]?.occurrences).toEqual([{ start: 0, length: 10 }]);
+        expect(Object.keys(renamed[0] ?? {}).sort()).toEqual([
+            "eventId",
+            "occurrences",
+            "recipientUserId",
+        ]);
     });
 
     it("reports what stands right now without being asked to update", () => {

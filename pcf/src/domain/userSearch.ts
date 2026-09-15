@@ -32,3 +32,15 @@ export interface UserSearchResult {
 export interface UserSearchProvider {
     search(term: string): Promise<UserSearchResult>;
 }
+
+/**
+ * Looks one known user up by id.
+ *
+ * Used to check that a mention a record carried still shows the person it was
+ * recorded for. The name that comes back is compared with the one standing in
+ * the text; it is never stored, and never used to decide who a mention means.
+ */
+export interface UserDirectory {
+    /** The display name Dataverse holds, or null when there is no such user. */
+    resolveName(userId: string): Promise<string | null>;
+}

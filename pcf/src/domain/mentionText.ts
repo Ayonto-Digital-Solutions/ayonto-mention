@@ -16,6 +16,52 @@ const MENTION_BOUNDARY = /[\s([{>]/;
  */
 const MENTION_END = /[\s,.;:!?()[\]{}"]/;
 
+/**
+ * True when an "@" at this index could have opened a mention.
+ *
+ * The one rule: it stands at the beginning of the text, or behind whitespace or
+ * an opening bracket. That is what keeps the "@" of an e-mail address from
+ * reading as a mention of the domain behind it.
+ */
+function opensMention(text: string, at: number): boolean {
+    if (text[at] !== "@") {
+        return false;
+    }
+    const previous = at > 0 ? text[at - 1] : undefined;
+    return previous === undefined || MENTION_BOUNDARY.test(previous);
+}
+
+/** True when a mention may end just before this index — a boundary, or the end. */
+function endsMention(text: string, at: number): boolean {
+    const following = text[at];
+    return following === undefined || MENTION_END.test(following);
+}
+
+/**
+ * True when this stretch of text reads as a whole mention, from its "@" to its
+ * last character.
+ *
+ * For spans that come from *outside* this editor — a stored payload naming a
+ * position in text somebody else may have edited since. A position on its own
+ * proves nothing, so it is held to exactly what the editor itself would have
+ * produced: an "@" that could have opened a mention, at least one character of a
+ * name, an end where a mention may end, and no line break in between, because a
+ * mention is never written across one.
+ *
+ * `"@Alex Rivera"` in `"@Alex RiveraX"` fails here, and is meant to: drawing the
+ * first twelve characters as a person would show a name the text does not have.
+ */
+export function readsAsMentionSpan(text: string, span: TextSpan): boolean {
+    if (span.end <= span.start + 1 || span.end > text.length) {
+        return false;
+    }
+    if (!opensMention(text, span.start) || !endsMention(text, span.end)) {
+        return false;
+    }
+
+    return !/[\r\n]/.test(text.slice(span.start, span.end));
+}
+
 /** A mention query never spans more characters than this. */
 export const MAX_QUERY_LENGTH = 40;
 
@@ -54,8 +100,7 @@ export function findMentionTrigger(text: string, caret: number): MentionTrigger 
         }
 
         if (character === "@") {
-            const previous = i > 0 ? text[i - 1] : undefined;
-            if (previous !== undefined && !MENTION_BOUNDARY.test(previous)) {
+            if (!opensMention(text, i)) {
                 return null;
             }
 
@@ -169,11 +214,7 @@ export function mentionDeletionRange(
 
 /** True when "@name" stands at exactly this position and ends where a mention may end. */
 function readsAsMention(text: string, at: number, name: string): boolean {
-    if (!text.startsWith(`@${name}`, at)) {
-        return false;
-    }
-    const following = text[at + name.length + 1];
-    return following === undefined || MENTION_END.test(following);
+    return text.startsWith(`@${name}`, at) && endsMention(text, at + name.length + 1);
 }
 
 /**
@@ -273,6 +314,53 @@ export function reanchorMentions<T extends InsertedMention>(
     return anchored;
 }
 
+/** A run of the text, and the mention it is when it is one. */
+export interface TrackedSegment<T extends InsertedMention> {
+    readonly text: string;
+    /** Present only for a run this editor is tracking as a mention. */
+    readonly mention?: T | undefined;
+}
+
+/**
+ * Cuts the text into the runs a reader sees: ordinary text, and the mentions
+ * this editor is tracking.
+ *
+ * Only tracked mentions become mentions. A name somebody typed by hand reads
+ * exactly like one and is not one, so it stays in the plain run around it — the
+ * text cannot say who it meant, and neither can this.
+ *
+ * Every character of the text appears in exactly one run, in order, so the runs
+ * concatenate back to what was passed in. Whitespace and line breaks are part of
+ * the plain runs and are never trimmed away.
+ */
+export function splitTrackedMentions<T extends InsertedMention>(
+    text: string,
+    mentions: readonly T[]
+): TrackedSegment<T>[] {
+    const segments: TrackedSegment<T>[] = [];
+    let plainFrom = 0;
+
+    for (const mention of [...mentions].sort((left, right) => left.start - right.start)) {
+        const { start, end } = mentionSpan(mention);
+        // A mention that no longer lines up with the text is not drawn over it.
+        if (start < plainFrom || end > text.length) {
+            continue;
+        }
+
+        if (start > plainFrom) {
+            segments.push({ text: text.slice(plainFrom, start) });
+        }
+        segments.push({ text: text.slice(start, end), mention });
+        plainFrom = end;
+    }
+
+    if (plainFrom < text.length) {
+        segments.push({ text: text.slice(plainFrom) });
+    }
+
+    return segments;
+}
+
 /** A run of text, and the user it mentions when it is one. */
 export interface MentionSegment {
     readonly text: string;
@@ -309,18 +397,11 @@ export function splitMentions(
     let plainFrom = 0;
 
     for (let at = text.indexOf("@"); at !== -1; at = text.indexOf("@", at + 1)) {
-        const previous = at > 0 ? text[at - 1] : undefined;
-        if (previous !== undefined && !MENTION_BOUNDARY.test(previous)) {
+        if (!opensMention(text, at)) {
             continue;
         }
 
-        const name = names.find((candidate) => {
-            if (!text.startsWith(`@${candidate}`, at)) {
-                return false;
-            }
-            const following = text[at + candidate.length + 1];
-            return following === undefined || MENTION_END.test(following);
-        });
+        const name = names.find((candidate) => readsAsMention(text, at, candidate));
         if (name === undefined) {
             continue;
         }

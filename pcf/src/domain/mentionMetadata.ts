@@ -23,6 +23,25 @@
 /** The wire format this control writes. Bumped when the shape changes. */
 export const MENTION_METADATA_SCHEMA_VERSION = 1;
 
+/**
+ * Where one mention stands in the text.
+ *
+ * `start` is a zero-based UTF-16 index — the same index JavaScript strings use —
+ * and points at the "@". `length` covers the whole visible "@Display Name" and
+ * stops there: the space a mention is usually followed by belongs to the
+ * sentence, not to the mention.
+ *
+ * This is editor state, and nothing more. A later server step may read it to
+ * understand what the editor drew, and must never treat a position as a reason
+ * to notify anybody: what identifies a notification is the event, the record,
+ * the column and the recipient. A position cannot authorize anything, because
+ * whoever can write the text can write any position they like.
+ */
+export interface MentionOccurrenceSpan {
+    readonly start: number;
+    readonly length: number;
+}
+
 /** One person the current session means to notify, once. */
 export interface MentionNotificationEvent {
     /**
@@ -33,6 +52,12 @@ export interface MentionNotificationEvent {
     readonly eventId: string;
     /** The identity. Normalized, and never the display name. */
     readonly recipientUserId: string;
+    /**
+     * Every place this person is mentioned in the text right now, in text order.
+     * One episode, however many occurrences: they are where the mention is, not
+     * how often it is worth telling them.
+     */
+    readonly occurrences: readonly MentionOccurrenceSpan[];
 }
 
 export interface MentionMetadataEnvelope {
@@ -63,6 +88,12 @@ export function serializeMentionMetadata(
         .map((event) => ({
             eventId: event.eventId,
             recipientUserId: event.recipientUserId,
+            occurrences: [...event.occurrences]
+                .sort((left, right) => left.start - right.start)
+                .map((occurrence) => ({
+                    start: occurrence.start,
+                    length: occurrence.length,
+                })),
         }));
 
     const envelope: MentionMetadataEnvelope = {

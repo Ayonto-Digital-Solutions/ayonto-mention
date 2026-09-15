@@ -177,6 +177,9 @@
   <data name="Editor_OfflineNotice" xml:space="preserve">
     <value>Keine Verbindung. Erwähnungen sind offline nicht verfügbar.</value>
   </data>
+  <data name="Editor_OpenMentionedUser" xml:space="preserve">
+    <value>{0} öffnen</value>
+  </data>
   <data name="Editor_MaskedValue" xml:space="preserve">
     <value>* * * * *</value>
   </data>
