@@ -5,32 +5,55 @@ import {
 import type { MentionNotificationEvent } from "../src/domain/mentionMetadata";
 import { createEventId } from "../src/services/eventId";
 
-const alex: MentionNotificationEvent = {
-    eventId: "event-alex",
-    recipientUserId: "u-alex",
-    recipientName: "Alex Rivera",
-    recipientEmail: "alex.rivera@example.invalid",
-};
-const dana: MentionNotificationEvent = {
-    eventId: "event-dana",
-    recipientUserId: "u-dana",
-    recipientName: "Dana Winter",
-};
+const alex: MentionNotificationEvent = { eventId: "event-alex", recipientUserId: "u-alex" };
+const dana: MentionNotificationEvent = { eventId: "event-dana", recipientUserId: "u-dana" };
 
 describe("serializeMentionMetadata", () => {
     it("writes the envelope the server reads", () => {
-        expect(JSON.parse(serializeMentionMetadata("description", [alex]))).toEqual({
-            schemaVersion: 1,
-            sourceField: "description",
-            mentions: [
-                {
-                    eventId: "event-alex",
-                    recipientUserId: "u-alex",
-                    recipientName: "Alex Rivera",
-                    recipientEmail: "alex.rivera@example.invalid",
-                },
-            ],
-        });
+        expect(serializeMentionMetadata("description", [alex])).toBe(
+            '{"schemaVersion":1,"sourceField":"description","mentions":' +
+                '[{"eventId":"event-alex","recipientUserId":"u-alex"}]}'
+        );
+    });
+
+    it("writes nothing about a person but who they are", () => {
+        const written = JSON.parse(serializeMentionMetadata("description", [alex, dana])) as {
+            mentions: Record<string, unknown>[];
+        };
+
+        expect(written.mentions.map((mention) => Object.keys(mention).sort())).toEqual([
+            ["eventId", "recipientUserId"],
+            ["eventId", "recipientUserId"],
+        ]);
+    });
+
+    it("writes no name or address a caller carries alongside an event", () => {
+        // The column sits on a business record and is written by whoever may
+        // write the text. Nothing personal, and nothing forgeable, goes into it.
+        const carried = {
+            ...alex,
+            recipientName: 'Robert"); DROP TABLE mentions; --',
+            recipientEmail: "private.address@example.invalid",
+            jobTitle: "Head of Something Confidential",
+        } as MentionNotificationEvent;
+
+        const written = serializeMentionMetadata("description", [carried]);
+
+        expect(written).toBe(
+            '{"schemaVersion":1,"sourceField":"description","mentions":' +
+                '[{"eventId":"event-alex","recipientUserId":"u-alex"}]}'
+        );
+        for (const leaked of [
+            "Robert",
+            "DROP TABLE",
+            "private.address@example.invalid",
+            "Confidential",
+            "recipientName",
+            "recipientEmail",
+            "jobTitle",
+        ]) {
+            expect(written).not.toContain(leaked);
+        }
     });
 
     it("declares schema version 1", () => {
@@ -46,25 +69,6 @@ describe("serializeMentionMetadata", () => {
 
     it("carries the column the mentions were written in", () => {
         expect(serializeMentionMetadata("ayonto_notes", [])).toContain('"sourceField":"ayonto_notes"');
-    });
-
-    it("leaves the address out rather than writing an empty one", () => {
-        const written = serializeMentionMetadata("description", [dana]);
-
-        expect(written).not.toContain("recipientEmail");
-        expect(JSON.parse(written)).toEqual({
-            schemaVersion: 1,
-            sourceField: "description",
-            mentions: [
-                { eventId: "event-dana", recipientUserId: "u-dana", recipientName: "Dana Winter" },
-            ],
-        });
-    });
-
-    it("treats an address of nothing but spaces as no address", () => {
-        expect(
-            serializeMentionMetadata("description", [{ ...dana, recipientEmail: "   " }])
-        ).not.toContain("recipientEmail");
     });
 
     it("orders the same people the same way, whatever order they arrive in", () => {
