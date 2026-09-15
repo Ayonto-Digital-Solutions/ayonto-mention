@@ -24,7 +24,7 @@ import {
 import type { InsertedMention, MentionTrigger } from "../domain/mentionText";
 import { sameMentionOccurrences } from "../domain/mentionLifecycle";
 import type { MentionOccurrence } from "../domain/mentionLifecycle";
-import type { UserSearchProvider, UserSuggestion } from "../domain/userSearch";
+import type { UserDirectory, UserSearchProvider, UserSuggestion } from "../domain/userSearch";
 import { useMentionSearch } from "../hooks/useMentionSearch";
 
 export interface MentionEditorStrings {
@@ -120,6 +120,12 @@ export interface MentionEditorProps {
      * editor is not the place that decides what a stored payload was worth.
      */
     readonly initialMentions?: readonly MentionOccurrence[] | undefined;
+    /**
+     * Looks a user up by id, so a mention a record carried can be shown to name
+     * the person it was recorded for — and can be left as ordinary text when
+     * that cannot be confirmed.
+     */
+    readonly userDirectory?: UserDirectory | undefined;
     /**
      * Opens the person a mention names. Without it the mentions still read as
      * mentions; they are simply not something to click.
@@ -298,8 +304,39 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
     const onHostValueAdoptedRef = React.useRef(props.onHostValueAdopted);
     onHostValueAdoptedRef.current = props.onHostValueAdopted;
 
+    /**
+     * The mentions that have been shown to name the person they were recorded
+     * for, keyed by that person and the name standing in the text.
+     *
+     * A position is not proof. A record's payload says "the twelve characters at
+     * six are user A", and an editor that never saw the text change cannot tell
+     * whether those twelve characters still spell user A's name or somebody
+     * else's — one save from another client is enough. So a mention only becomes
+     * a person to press once Dataverse has confirmed that this id really is
+     * called what the text says. Until then, and for good if it cannot be
+     * confirmed, it stays ordinary text.
+     */
+    const [verified, setVerified] = React.useState<ReadonlySet<string>>(new Set<string>());
+    /** What has already been asked about, so nothing is asked about twice. */
+    const asked = React.useRef<Set<string>>(new Set<string>());
+    /** False once this editor is gone, so no answer arrives at nothing. */
+    const mounted = React.useRef(true);
+
+    React.useEffect(
+        () => () => {
+            mounted.current = false;
+        },
+        []
+    );
+
     /** The last set that was handed out, so an unchanged set is not reported again. */
     const reportedMentions = React.useRef<readonly MentionOccurrence[]>([]);
+
+    /** One mention of one person: both halves matter, because names repeat. */
+    const identityKey = React.useCallback(
+        (mention: { userId: string; name: string }): string => `${mention.userId}\u0000${mention.name}`,
+        []
+    );
 
     const toOccurrence = React.useCallback(
         (mention: TrackedMention): MentionOccurrence =>
@@ -337,6 +374,47 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
         [toOccurrence]
     );
 
+    /**
+     * Asks Dataverse about every tracked mention that has not been confirmed yet.
+     *
+     * Runs after each render and does nothing on most of them: what has been
+     * asked about once is never asked about again. A mention picked in this
+     * session needs no round trip — the name in the text came from the entry the
+     * user picked — so only what a record carried is looked up.
+     *
+     * Nothing here changes the value or the payload. Failing to confirm a
+     * mention makes it read as ordinary text; it never edits the record.
+     */
+    React.useEffect(() => {
+        const directory = props.userDirectory;
+        if (directory === undefined) {
+            return;
+        }
+
+        const pending = insertedMentions.current.filter(
+            (mention) => !asked.current.has(identityKey(mention))
+        );
+
+        for (const mention of pending) {
+            const key = identityKey(mention);
+            asked.current.add(key);
+            void directory.resolveName(mention.userId).then((name) => {
+                // Confirmed only when this id really is called what the text
+                // says. Anything else — a different name, a deleted user, a
+                // refused or unreachable read — leaves it as text.
+                //
+                // Only being gone cancels this. An answer is about one id and
+                // one name, so it stays true however much the field has been
+                // rendered in the meantime — and a question already asked is
+                // never asked again, so dropping the answer would lose it.
+                if (mounted.current && name !== null && name === mention.name) {
+                    setVerified((current) => new Set(current).add(key));
+                }
+                return undefined;
+            });
+        }
+    });
+
     // A disabled field offers nobody, a field that may not record a mention
     // offers nobody, a field whose notice explains why mentioning is off offers
     // nobody, and a query is only ever what the caret is on. Nothing is looked
@@ -355,14 +433,27 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
      * and is emptied whenever a host value is adopted.
      */
     const emittedValues = React.useRef<Set<string>>(new Set<string>([value]));
-    /** A genuine host value that arrived mid-edit and is waiting for editing to end. */
-    const pendingHostValue = React.useRef<string | null>(null);
+    /**
+     * A genuine host value that arrived mid-edit and is waiting for editing to
+     * end — together with the mentions that belong to *that* value.
+     *
+     * The two are one state. Taking the text without the identities recorded
+     * for it would leave the editor showing one record's words with another
+     * record's people attached to them.
+     */
+    const pendingHostValue = React.useRef<MentionEditorState | null>(null);
+    /** The mentions the caller says belong to the value it is passing in. */
+    const hostMentionsRef = React.useRef(props.initialMentions ?? []);
+    hostMentionsRef.current = props.initialMentions ?? [];
 
     /** Takes a host value over wholesale: text, anchors and bookkeeping. */
     const adoptHostValue = React.useCallback(
-        (next: string) => {
+        (next: string, mentions: readonly MentionOccurrence[]) => {
             setText(next);
-            reanchor(next);
+            // The identities recorded for this value replace whatever was
+            // attached to the one before it, in the same step as the text.
+            insertedMentions.current = mentions.map((mention) => ({ ...mention }));
+            anchoredText.current = next;
             const changed = mentionsChanged();
             const state: MentionEditorState = { text: next, mentions: mentionSnapshot() };
             emittedValues.current = new Set<string>([next]);
@@ -374,7 +465,7 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
                 onHostValueAdoptedRef.current?.(state);
             }
         },
-        [mentionSnapshot, mentionsChanged, reanchor]
+        [mentionSnapshot, mentionsChanged]
     );
 
     /**
@@ -424,11 +515,39 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
             return;
         }
         if (isFocused.current && props.masked !== true) {
-            pendingHostValue.current = value;
+            pendingHostValue.current = { text: value, mentions: hostMentionsRef.current };
             return;
         }
-        adoptHostValue(value);
+        adoptHostValue(value, hostMentionsRef.current);
     }, [adoptHostValue, props.masked, value]);
+
+    /**
+     * Carries focus across the step from reading to editing.
+     *
+     * Reading and editing are two different renders: the tokens are not a
+     * textarea, so the textarea the user is asking for does not exist yet at
+     * the moment they ask for it. Without this, one click would put the field
+     * into editing and leave focus nowhere — the user would have to click a
+     * second time to type a character.
+     */
+    const focusOnEdit = React.useRef(false);
+
+    React.useEffect(() => {
+        const field = textareaRef.current;
+        if (focusOnEdit.current && field !== null) {
+            focusOnEdit.current = false;
+            field.focus();
+            // Reading ends where the text ends, which is where typing carries on.
+            const end = field.value.length;
+            field.setSelectionRange(end, end);
+        }
+    });
+
+    /** Leaves reading for editing, with the caret in the field. */
+    const beginEditing = React.useCallback(() => {
+        focusOnEdit.current = true;
+        setIsEditing(true);
+    }, []);
 
     // Puts the caret back after a mention was written into the text.
     React.useEffect(() => {
@@ -473,7 +592,7 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
         closeSuggestions();
         const pending = pendingHostValue.current;
         if (pending !== null) {
-            adoptHostValue(pending);
+            adoptHostValue(pending.text, pending.mentions);
         }
     }, [adoptHostValue, closeSuggestions]);
 
@@ -597,6 +716,9 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
                 // equal rather than look changed because the order shifted.
             ].sort(byStart);
 
+            // The name in the text is the name of the entry that was picked, so
+            // there is nothing left to confirm about this one.
+            setVerified((current) => new Set(current).add(identityKey(written)));
             pendingCaret.current = result.caret;
             closeSuggestions();
             // Handed on only once the mention is actually in the text, and with
@@ -607,6 +729,7 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
         [
             closeSuggestions,
             commitLocalEdit,
+            identityKey,
             props.maxLength,
             reanchor,
             strings.mentionTooLong,
@@ -713,18 +836,38 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
                         styles.reader,
                         props.disabled ? styles.readerDisabled : undefined
                     )}
+                    aria-label={props.label}
                     // Reading is where editing starts, exactly as it does in an
                     // ordinary field: clicking the text puts the caret in it.
                     onClick={() => {
                         if (!props.disabled) {
-                            setIsEditing(true);
+                            beginEditing();
                         }
                     }}
-                    role="presentation"
+                    // The same step without a mouse. Enter and Space are what a
+                    // field at rest answers to, so a keyboard user reaches the
+                    // text the same way and by the same keys.
+                    onKeyDown={(event: React.KeyboardEvent) => {
+                        if (props.disabled || (event.key !== "Enter" && event.key !== " ")) {
+                            return;
+                        }
+                        // Space would otherwise scroll the form out from under
+                        // the field it just opened.
+                        event.preventDefault();
+                        beginEditing();
+                    }}
+                    // A group rather than a textbox: it holds the tokens, which
+                    // are reachable in their own right, and it is not itself
+                    // something to type into.
+                    role="group"
+                    tabIndex={props.disabled ? -1 : 0}
                 >
                     {splitTrackedMentions(text, insertedMentions.current).map((segment, index) => {
                         const mention = segment.mention;
-                        return mention === undefined ? (
+                        // Not confirmed, not a person: the characters are shown
+                        // as the text they are, and pressing them starts editing
+                        // like any other part of the value.
+                        return mention === undefined || !verified.has(identityKey(mention)) ? (
                             // Runs have no identity of their own: they are cut
                             // from the text afresh on every render.
                             <React.Fragment key={index}>{segment.text}</React.Fragment>

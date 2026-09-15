@@ -43,11 +43,26 @@ interface Host {
     readonly webAPI: ComponentFramework.WebApi;
     readonly navigation: ComponentFramework.Navigation;
     readonly opened: OpenedForm[];
+    /** The ids the control asked Dataverse about, in order. */
+    readonly lookedUp: string[];
     failNextOpen(): void;
 }
 
-function makeHost(): Host {
+/** Who the environment says these fictional ids belong to. */
+const DIRECTORY: Record<string, string | null> = {
+    [USER_A]: "Alex Rivera",
+    [USER_B]: "Robin Fox",
+};
+
+/** Two different people who really are called the same thing. */
+const NAMESAKES: Record<string, string | null> = {
+    [USER_A]: "Robin Fox",
+    [USER_B]: "Robin Fox",
+};
+
+function makeHost(directory: Record<string, string | null> = DIRECTORY): Host {
     const opened: OpenedForm[] = [];
+    const lookedUp: string[] = [];
     let failNext = false;
 
     return {
@@ -55,6 +70,15 @@ function makeHost(): Host {
             retrieveMultipleRecords: jest.fn(() =>
                 Promise.resolve({ entities: [], nextLink: "" })
             ),
+            // The only thing the control asks about a persisted mention: is this
+            // id really called what the text says it is?
+            retrieveRecord: jest.fn((entity: string, id: string) => {
+                lookedUp.push(id);
+                const name = directory[id];
+                return name === undefined || name === null
+                    ? Promise.reject(new Error("user not found at https://org-a1b2.example.invalid"))
+                    : Promise.resolve({ systemuserid: id, fullname: name });
+            }),
         } as unknown as ComponentFramework.WebApi,
         navigation: {
             openForm: jest.fn((options: ComponentFramework.NavigationApi.EntityFormOptions) => {
@@ -69,6 +93,7 @@ function makeHost(): Host {
             }),
         } as unknown as ComponentFramework.Navigation,
         opened,
+        lookedUp,
         failNextOpen: () => {
             failNext = true;
         },
@@ -84,10 +109,11 @@ interface HostOptions {
     readonly logicalName?: string;
     readonly host?: Host;
     readonly maxLength?: number;
+    readonly directory?: Record<string, string | null>;
 }
 
 function makeContext(options: HostOptions = {}): ComponentFramework.Context<IInputs> {
-    const host = options.host ?? makeHost();
+    const host = options.host ?? makeHost(options.directory ?? DIRECTORY);
     return {
         parameters: {
             field: {
@@ -123,10 +149,17 @@ function makeContext(options: HostOptions = {}): ComponentFramework.Context<IInp
 let container: HTMLDivElement;
 let notifyCount = 0;
 
-function start(options: HostOptions = {}): {
+/**
+ * Opens a record and lets the identity lookups settle.
+ *
+ * A persisted mention is not shown as a person until Dataverse has confirmed who
+ * the id belongs to, so a test that wants to see tokens has to let that answer
+ * arrive — which is exactly what a user sees: text first, people a moment later.
+ */
+async function start(options: HostOptions = {}): Promise<{
     control: MentionControl;
     editor: MentionEditorProps;
-} {
+}> {
     const control = new MentionControl();
     const context = makeContext(options);
     control.init(
@@ -136,7 +169,9 @@ function start(options: HostOptions = {}): {
         },
         {}
     );
-    return { control, editor: render(control, context) };
+    const editor = render(control, context);
+    await flush();
+    return { control, editor };
 }
 
 function render(
@@ -175,7 +210,7 @@ function requiredField(): HTMLTextAreaElement {
 }
 
 function reader(): HTMLElement | null {
-    return container.querySelector('[role="presentation"]');
+    return container.querySelector('[role="group"]');
 }
 
 /** The mention tokens on screen, in order. */
@@ -250,8 +285,8 @@ afterEach(() => {
 });
 
 describe("a saved record with a mention in it", () => {
-    it("shows the person as a token, and the rest as text", () => {
-        start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+    it("shows the person as a token, and the rest as text", async () => {
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
 
         expect(field()).toBeNull();
         expect(tokens()).toHaveLength(1);
@@ -260,61 +295,61 @@ describe("a saved record with a mention in it", () => {
         expect(plainRuns()).toBe("Hello  today");
     });
 
-    it("names the token for somebody who cannot see it", () => {
-        start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+    it("names the token for somebody who cannot see it", async () => {
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
 
         expect(tokenAt(0).getAttribute("aria-label")).toBe(
             resourceValue("Editor_OpenMentionedUser").replace("{0}", "Alex Rivera")
         );
     });
 
-    it("gives the token an avatar that is not separately reachable", () => {
-        start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+    it("gives the token an avatar that is not separately reachable", async () => {
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
 
         const avatar = tokenAt(0).querySelector('[aria-hidden="true"]');
         expect(avatar).not.toBeNull();
         expect(tokens()).toHaveLength(1);
     });
 
-    it("leaves a name that was only typed as ordinary text", () => {
-        start({ value: "Hello @Alex Rivera today", metadata: "" });
+    it("leaves a name that was only typed as ordinary text", async () => {
+        await start({ value: "Hello @Alex Rivera today", metadata: "" });
 
         expect(tokens()).toEqual([]);
         expect(field()?.value).toBe("Hello @Alex Rivera today");
     });
 
-    it("leaves a stale occurrence as ordinary text", () => {
+    it("leaves a stale occurrence as ordinary text", async () => {
         // The payload points past the end of the text it was saved with.
         const stale = payload([
             { eventId: EVENT_A, recipientUserId: USER_A, occurrences: [{ start: 60, length: 12 }] },
         ]);
 
-        start({ value: SAVED_TEXT, metadata: stale });
+        await start({ value: SAVED_TEXT, metadata: stale });
 
         expect(tokens()).toEqual([]);
     });
 
-    it("keeps two namesakes apart", () => {
+    it("keeps two namesakes apart", async () => {
         const text = "@Robin Fox and @Robin Fox ";
         const both = payload([
             { eventId: EVENT_A, recipientUserId: USER_A, occurrences: [{ start: 0, length: 10 }] },
             { eventId: EVENT_B, recipientUserId: USER_B, occurrences: [{ start: 15, length: 10 }] },
         ]);
 
-        start({ value: text, metadata: both });
+        await start({ value: text, metadata: both, directory: NAMESAKES });
 
         expect(tokens()).toHaveLength(2);
         expect(tokenAt(0).textContent).toContain("Robin Fox");
         expect(tokenAt(1).textContent).toContain("Robin Fox");
     });
 
-    it("keeps line breaks and runs of spaces exactly as they were saved", () => {
+    it("keeps line breaks and runs of spaces exactly as they were saved", async () => {
         const text = "First line\n\n  @Alex Rivera  after";
         const raw = payload([
             { eventId: EVENT_A, recipientUserId: USER_A, occurrences: [{ start: 14, length: 12 }] },
         ]);
 
-        start({ value: text, metadata: raw });
+        await start({ value: text, metadata: raw });
 
         // Every line break and every space between the words survives; only the
         // mention itself is drawn as a person.
@@ -322,16 +357,16 @@ describe("a saved record with a mention in it", () => {
         expect(tokens()).toHaveLength(1);
     });
 
-    it("still says how much room is left while reading", () => {
-        start({ value: SAVED_TEXT, metadata: SAVED_METADATA, maxLength: 100 });
+    it("still says how much room is left while reading", async () => {
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, maxLength: 100 });
 
         expect(container.textContent).toContain(
             resourceValue("Editor_CharactersLeft").replace("{0}", "76")
         );
     });
 
-    it("shows nothing at all when the column may not be read", () => {
-        start({ value: SAVED_TEXT, metadata: SAVED_METADATA, readable: false });
+    it("shows nothing at all when the column may not be read", async () => {
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, readable: false });
 
         expect(tokens()).toEqual([]);
         expect(container.textContent).not.toContain("Alex Rivera");
@@ -339,8 +374,8 @@ describe("a saved record with a mention in it", () => {
         expect(container.textContent).toContain(resourceValue("Editor_MaskedValue"));
     });
 
-    it("still shows the people on a read-only field, without becoming editable", () => {
-        start({ value: SAVED_TEXT, metadata: SAVED_METADATA, disabled: true });
+    it("still shows the people on a read-only field, without becoming editable", async () => {
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, disabled: true });
 
         expect(tokens()).toHaveLength(1);
         enterEditing();
@@ -349,9 +384,9 @@ describe("a saved record with a mention in it", () => {
 });
 
 describe("opening the person a mention names", () => {
-    it("opens exactly that Dataverse user", () => {
+    it("opens exactly that Dataverse user", async () => {
         const host = makeHost();
-        start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
 
         act(() => {
             Simulate.click(tokenAt(0));
@@ -360,10 +395,10 @@ describe("opening the person a mention names", () => {
         expect(host.opened).toEqual([{ entityName: "systemuser", entityId: USER_A }]);
     });
 
-    it("opens different people for two namesakes", () => {
-        const host = makeHost();
+    it("opens different people for two namesakes", async () => {
+        const host = makeHost(NAMESAKES);
         const text = "@Robin Fox and @Robin Fox ";
-        start({
+        await start({
             value: text,
             host,
             metadata: payload([
@@ -382,9 +417,9 @@ describe("opening the person a mention names", () => {
         expect(host.opened.map((form) => form.entityId)).toEqual([USER_A, USER_B]);
     });
 
-    it("opens from the keyboard", () => {
+    it("opens from the keyboard", async () => {
         const host = makeHost();
-        start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
 
         // The token is a button: the browser turns Enter and Space into a click,
         // and the element is reachable by Tab because nothing removes it.
@@ -397,18 +432,18 @@ describe("opening the person a mention names", () => {
         expect(host.opened).toHaveLength(1);
     });
 
-    it("does not open anything when ordinary text is clicked", () => {
+    it("does not open anything when ordinary text is clicked", async () => {
         const host = makeHost();
-        start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
 
         enterEditing();
 
         expect(host.opened).toEqual([]);
     });
 
-    it("does not put the editor into editing when a token is clicked", () => {
+    it("does not put the editor into editing when a token is clicked", async () => {
         const host = makeHost();
-        start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
 
         act(() => {
             Simulate.click(tokenAt(0));
@@ -418,11 +453,31 @@ describe("opening the person a mention names", () => {
         expect(tokens()).toHaveLength(1);
     });
 
+    it("goes nowhere for anything that is not a record id", async () => {
+        const host = makeHost();
+        const { editor } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+
+        for (const id of ["", "   ", "u-alex", `${USER_A}-extra`, "../systemuser"]) {
+            editor.onOpenUser?.(id);
+        }
+
+        expect(host.opened).toEqual([]);
+    });
+
+    it("opens a braced or upper-case id as the record it names", async () => {
+        const host = makeHost();
+        const { editor } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+
+        editor.onOpenUser?.(`{${USER_A.toUpperCase()}}`);
+
+        expect(host.opened).toEqual([{ entityName: "systemuser", entityId: USER_A }]);
+    });
+
     it("says nothing to the user when the form cannot be opened", async () => {
         const errors = jest.spyOn(console, "error").mockImplementation(() => undefined);
         const warnings = jest.spyOn(console, "warn").mockImplementation(() => undefined);
         const host = makeHost();
-        start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
         host.failNextOpen();
 
         act(() => {
@@ -443,8 +498,8 @@ describe("opening the person a mention names", () => {
 });
 
 describe("moving between reading and editing", () => {
-    it("shows the same text, and keeps the identities", () => {
-        const { control } = start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+    it("shows the same text, and keeps the identities", async () => {
+        const { control } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
         const text = control.getOutputs().field;
         const metadata = control.getOutputs().mentionMetadata;
         notifyCount = 0;
@@ -457,8 +512,8 @@ describe("moving between reading and editing", () => {
         expect(notifyCount).toBe(0);
     });
 
-    it("returns to the tokens when editing ends, unchanged", () => {
-        const { control } = start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+    it("returns to the tokens when editing ends, unchanged", async () => {
+        const { control } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
         const metadata = control.getOutputs().mentionMetadata;
         enterEditing();
         notifyCount = 0;
@@ -474,8 +529,8 @@ describe("moving between reading and editing", () => {
         expect(notifyCount).toBe(0);
     });
 
-    it("carries the identity the record had into the next edit", () => {
-        const { control } = start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+    it("carries the identity the record had into the next edit", async () => {
+        const { control } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
         enterEditing();
 
         // An edit somewhere else in the text: the mention only moves.
@@ -491,8 +546,8 @@ describe("moving between reading and editing", () => {
         expect(written.mentions[0]?.occurrences).toEqual([{ start: 10, length: 12 }]);
     });
 
-    it("ends the episode when the mention is deleted, and starts a new one later", () => {
-        const { control } = start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+    it("ends the episode when the mention is deleted, and starts a new one later", async () => {
+        const { control } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
         enterEditing();
 
         type("Hello  today");
@@ -503,8 +558,8 @@ describe("moving between reading and editing", () => {
         expect(emptied.mentions).toEqual([]);
     });
 
-    it("forgets the record's identities at a record boundary", () => {
-        const { control } = start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+    it("forgets the record's identities at a record boundary", async () => {
+        const { control } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
         expect(tokens()).toHaveLength(1);
 
         render(control, makeContext({ recordId: RECORD_B, value: "", metadata: "" }));
@@ -513,8 +568,8 @@ describe("moving between reading and editing", () => {
         expect(control.getOutputs().mentionMetadata).toBe("");
     });
 
-    it("refuses a payload that belongs to another column", () => {
-        start({
+    it("refuses a payload that belongs to another column", async () => {
+        await start({
             value: SAVED_TEXT,
             metadata: payload(
                 [
@@ -529,5 +584,355 @@ describe("moving between reading and editing", () => {
         });
 
         expect(tokens()).toEqual([]);
+    });
+});
+
+describe("a persisted mention whose text has moved on", () => {
+    /**
+     * Somebody else saved this record while it was not open here: the text at
+     * the recorded position now spells a different person's name, and the
+     * payload still names the old one.
+     */
+    const REPOINTED = "Hello @Robin Fox today";
+    const REPOINTED_METADATA = payload([
+        { eventId: EVENT_A, recipientUserId: USER_A, occurrences: [{ start: 6, length: 10 }] },
+    ]);
+
+    it("does not make the old person out of the new name", async () => {
+        const host = makeHost();
+        await start({ value: REPOINTED, metadata: REPOINTED_METADATA, host });
+
+        // USER_A is Alex Rivera; the text says Robin Fox. Position alone would
+        // have drawn a Robin Fox that opens Alex Rivera.
+        expect(host.lookedUp).toEqual([USER_A]);
+        expect(tokens()).toEqual([]);
+        expect(plainRuns()).toBe(REPOINTED);
+    });
+
+    it("leaves that name as text to edit, not as a person to press", async () => {
+        const host = makeHost();
+        await start({ value: REPOINTED, metadata: REPOINTED_METADATA, host });
+
+        enterEditing();
+
+        expect(host.opened).toEqual([]);
+        expect(requiredField().value).toBe(REPOINTED);
+    });
+
+    it("keeps the mention as ordinary text when nobody can be asked", async () => {
+        // No connection, a deleted user, a read the user is not allowed: one
+        // answer for all of them, because none of them is proof.
+        const host = makeHost({ [USER_A]: null });
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+
+        expect(host.lookedUp).toEqual([USER_A]);
+        expect(tokens()).toEqual([]);
+        expect(plainRuns()).toBe(SAVED_TEXT);
+    });
+
+    it("changes nothing about the record when it cannot confirm", async () => {
+        const host = makeHost({ [USER_A]: null });
+        const { control } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+
+        // Not being able to check a name is not a reason to rewrite a record.
+        expect(notifyCount).toBe(0);
+        expect(control.getOutputs().field).toBe(SAVED_TEXT);
+        expect(control.getOutputs().mentionMetadata).toBe(SAVED_METADATA);
+    });
+
+    it("still edits, and still carries the identity, with no connection", async () => {
+        const host = makeHost({ [USER_A]: null });
+        const { control } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+
+        enterEditing();
+        type(`Hi. ${SAVED_TEXT}`);
+
+        // The record's notification is intact and has moved with the text: what
+        // could not be confirmed was whether to *draw* it as a person.
+        const written = JSON.parse(control.getOutputs().mentionMetadata ?? "") as {
+            mentions: { eventId: string; recipientUserId: string; occurrences: Span[] }[];
+        };
+        expect(written.mentions[0]?.eventId).toBe(EVENT_A);
+        expect(written.mentions[0]?.recipientUserId).toBe(USER_A);
+        expect(written.mentions[0]?.occurrences).toEqual([{ start: 10, length: 12 }]);
+    });
+
+    it("asks about one mention once, however often the field renders", async () => {
+        const host = makeHost();
+        const { control } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+
+        render(control, makeContext({ value: SAVED_TEXT, metadata: SAVED_METADATA, host }));
+        await flush();
+        render(control, makeContext({ value: SAVED_TEXT, metadata: SAVED_METADATA, host }));
+        await flush();
+
+        expect(host.lookedUp).toEqual([USER_A]);
+        expect(tokens()).toHaveLength(1);
+    });
+
+    it("still shows the person when the answer arrives after other renders", async () => {
+        // The answer is about one id and one name; it does not go out of date
+        // because the form redrew while it was on its way. And since the same
+        // question is never asked twice, dropping it would lose the person for
+        // as long as the record stays open.
+        let answer: ((name: string) => void) | undefined;
+        const host = makeHost();
+        const pending = {
+            ...host,
+            webAPI: {
+                retrieveRecord: jest.fn(
+                    () =>
+                        new Promise<Record<string, unknown>>((resolve) => {
+                            answer = (name: string) => {
+                                resolve({ systemuserid: USER_A, fullname: name });
+                            };
+                        })
+                ),
+            } as unknown as ComponentFramework.WebApi,
+        };
+        const { control } = await start({
+            value: SAVED_TEXT,
+            metadata: SAVED_METADATA,
+            host: pending,
+        });
+        expect(tokens()).toEqual([]);
+
+        render(control, makeContext({ value: SAVED_TEXT, metadata: SAVED_METADATA, host: pending }));
+        await flush();
+        act(() => {
+            answer?.("Alex Rivera");
+        });
+        await flush();
+
+        expect(tokenAt(0).textContent).toContain("Alex Rivera");
+    });
+
+    it("says nothing about the environment when a lookup fails", async () => {
+        const errors = jest.spyOn(console, "error").mockImplementation(() => undefined);
+        const warnings = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+        const host = makeHost({ [USER_A]: null });
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+
+        expect(container.textContent).not.toContain("example.invalid");
+        expect(errors).not.toHaveBeenCalled();
+        expect(warnings).not.toHaveBeenCalled();
+        errors.mockRestore();
+        warnings.mockRestore();
+    });
+
+    it("asks for nobody at all when the record names nobody", async () => {
+        const host = makeHost();
+        await start({ value: "Hello @Alex Rivera today", metadata: "", host });
+
+        // A hand-typed name is not a mention, and is nobody's business.
+        expect(host.lookedUp).toEqual([]);
+    });
+});
+
+describe("a record the host decides while it is open", () => {
+    /** Another save of the same record: different words, different person. */
+    const EXTERNAL_TEXT = "Please see @Robin Fox about it";
+    const EXTERNAL_METADATA = payload([
+        { eventId: EVENT_B, recipientUserId: USER_B, occurrences: [{ start: 11, length: 10 }] },
+    ]);
+
+    it("takes the new text and the new people in one step", async () => {
+        const host = makeHost();
+        const { control } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+        expect(tokens()).toHaveLength(1);
+
+        render(control, makeContext({ value: EXTERNAL_TEXT, metadata: EXTERNAL_METADATA, host }));
+        await flush();
+
+        expect(plainRuns()).toBe("Please see  about it");
+        expect(tokenAt(0).textContent).toContain("Robin Fox");
+        act(() => {
+            Simulate.click(tokenAt(0));
+        });
+        // Never the previous save's person standing in the new save's words.
+        expect(host.opened).toEqual([{ entityName: "systemuser", entityId: USER_B }]);
+    });
+
+    it("carries the new identity into the next edit", async () => {
+        const host = makeHost();
+        const { control } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+
+        render(control, makeContext({ value: EXTERNAL_TEXT, metadata: EXTERNAL_METADATA, host }));
+        await flush();
+        enterEditing();
+        type(`Hi. ${EXTERNAL_TEXT}`);
+
+        const written = JSON.parse(control.getOutputs().mentionMetadata ?? "") as {
+            mentions: { eventId: string; recipientUserId: string }[];
+        };
+        expect(written.mentions).toHaveLength(1);
+        expect(written.mentions[0]?.recipientUserId).toBe(USER_B);
+        // The same notification the other save recorded, not a second one.
+        expect(written.mentions[0]?.eventId).toBe(EVENT_B);
+    });
+
+    it("waits for the edit to end, and then takes both halves together", async () => {
+        const host = makeHost();
+        const { control } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+        enterEditing();
+        act(() => {
+            Simulate.focus(requiredField());
+        });
+
+        render(control, makeContext({ value: EXTERNAL_TEXT, metadata: EXTERNAL_METADATA, host }));
+        await flush();
+        // Mid-edit the user keeps what they are writing.
+        expect(requiredField().value).toBe(SAVED_TEXT);
+
+        act(() => {
+            Simulate.blur(requiredField());
+        });
+        await flush();
+
+        expect(plainRuns()).toBe("Please see  about it");
+        act(() => {
+            Simulate.click(tokenAt(0));
+        });
+        expect(host.opened).toEqual([{ entityName: "systemuser", entityId: USER_B }]);
+    });
+
+    it("is not disturbed by its own output coming back", async () => {
+        const host = makeHost();
+        const { control } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+        enterEditing();
+        type(`Hi. ${SAVED_TEXT}`);
+        const text = control.getOutputs().field ?? "";
+        const metadata = control.getOutputs().mentionMetadata ?? "";
+        const asked = host.lookedUp.length;
+        notifyCount = 0;
+
+        // The host acknowledges the edit, twice, as it is free to do.
+        render(control, makeContext({ value: text, metadata, host }));
+        await flush();
+        render(control, makeContext({ value: text, metadata, host }));
+        await flush();
+
+        expect(requiredField().value).toBe(text);
+        expect(control.getOutputs().mentionMetadata).toBe(metadata);
+        // No new episode, no new lookup, nothing reported to the framework.
+        expect(host.lookedUp).toHaveLength(asked);
+        expect(notifyCount).toBe(0);
+        // The field the user was typing in is still the field they were typing
+        // in: an acknowledgement is not a reason to build the editor again.
+        expect(document.activeElement).toBe(requiredField());
+        // And it still knows where its mention is, which a rebuilt editor would
+        // not: Backspace behind the name takes the name, not one character.
+        const withMention = requiredField();
+        // "Hi. Hello @Alex Rivera today": the name runs from 10 to 22.
+        withMention.setSelectionRange(22, 22);
+        act(() => {
+            Simulate.keyDown(withMention, { key: "Backspace" });
+        });
+        expect(withMention.selectionStart).toBe(10);
+        expect(withMention.selectionEnd).toBe(23);
+    });
+
+    it("ignores a late echo of a value the user has moved past", async () => {
+        const host = makeHost();
+        const { control } = await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+        enterEditing();
+        type(`${SAVED_TEXT}!`);
+        type(`${SAVED_TEXT}!!`);
+        const metadata = control.getOutputs().mentionMetadata ?? "";
+
+        render(control, makeContext({ value: `${SAVED_TEXT}!`, metadata, host }));
+        await flush();
+
+        expect(requiredField().value).toBe(`${SAVED_TEXT}!!`);
+        expect(control.getOutputs().field).toBe(`${SAVED_TEXT}!!`);
+    });
+});
+
+describe("starting to edit a field that is at rest", () => {
+    it("puts the caret in the field on the first click", async () => {
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+
+        enterEditing();
+
+        // One click, one field to type in — not a click to open it and another
+        // to reach it.
+        expect(document.activeElement).toBe(requiredField());
+        expect(requiredField().selectionStart).toBe(SAVED_TEXT.length);
+    });
+
+    it("can be reached and opened from the keyboard", async () => {
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+        const surface = reader();
+        if (surface === null) {
+            throw new Error("the field is not in read mode");
+        }
+
+        expect(surface.getAttribute("tabindex")).toBe("0");
+        act(() => {
+            Simulate.keyDown(surface, { key: "Enter" });
+        });
+
+        expect(document.activeElement).toBe(requiredField());
+    });
+
+    it("opens on Space as well, without scrolling the form", async () => {
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+        const surface = reader();
+        if (surface === null) {
+            throw new Error("the field is not in read mode");
+        }
+        let defaultPrevented = false;
+
+        act(() => {
+            Simulate.keyDown(surface, {
+                key: " ",
+                preventDefault: () => {
+                    defaultPrevented = true;
+                },
+            });
+        });
+
+        expect(defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(requiredField());
+    });
+
+    it("stays where it is for any other key", async () => {
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+        const surface = reader();
+        if (surface === null) {
+            throw new Error("the field is not in read mode");
+        }
+
+        act(() => {
+            Simulate.keyDown(surface, { key: "Tab" });
+        });
+
+        expect(field()).toBeNull();
+    });
+
+    it("does not open on a key press when the field is read-only", async () => {
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, disabled: true });
+        const surface = reader();
+        if (surface === null) {
+            throw new Error("the field is not in read mode");
+        }
+
+        expect(surface.getAttribute("tabindex")).toBe("-1");
+        act(() => {
+            Simulate.keyDown(surface, { key: "Enter" });
+        });
+
+        expect(field()).toBeNull();
+    });
+
+    it("leaves the field alone when a person is pressed instead", async () => {
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
+
+        act(() => {
+            Simulate.click(tokenAt(0));
+        });
+
+        expect(field()).toBeNull();
+        expect(document.activeElement).not.toBe(field());
     });
 });

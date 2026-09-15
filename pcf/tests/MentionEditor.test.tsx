@@ -831,15 +831,17 @@ describe("MentionEditor value reconciliation", () => {
 });
 
 describe("MentionEditor with nobody to open", () => {
-    it("still shows the mention, as something to read rather than to press", () => {
+    it("still shows the mention, as something to read rather than to press", async () => {
         // A caller that hands over no way to open a person still gets the
         // mention drawn: knowing who is meant is worth something on its own.
         render(
             props({
                 value: "Hi @Alex Rivera",
                 initialMentions: [{ start: 3, name: "Alex Rivera", userId: "u-alex" }],
+                userDirectory: { resolveName: () => Promise.resolve("Alex Rivera") },
             })
         );
+        await flush();
 
         const token = container.querySelector("button");
         expect(token?.textContent).toContain("Alex Rivera");

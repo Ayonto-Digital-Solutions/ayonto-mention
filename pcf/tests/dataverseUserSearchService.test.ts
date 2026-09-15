@@ -1,5 +1,6 @@
 import { DataverseUserSearchService } from "../src/services/dataverseUserSearchService";
 import type {
+    UserDirectory,
     UserSearchProvider,
     UserSearchResult,
     UserSuggestion,
@@ -357,5 +358,89 @@ describe("domain and adapter boundary", () => {
         };
 
         await expect(namesFrom(provider, "Dan")).resolves.toEqual(["Dana Winter"]);
+    });
+});
+
+describe("confirming who an id belongs to", () => {
+    interface Lookup {
+        readonly entity: string;
+        readonly id: string;
+        readonly options: string;
+    }
+
+    function makeDirectory(
+        answer: (id: string) => Promise<Record<string, unknown>>,
+        looked: Lookup[] = []
+    ): { service: DataverseUserSearchService; looked: Lookup[] } {
+        const webAPI = {
+            retrieveRecord: jest.fn((entity: string, id: string, options?: string) => {
+                looked.push({ entity, id, options: options ?? "" });
+                return answer(id);
+            }),
+        } as unknown as ComponentFramework.WebApi;
+
+        return { service: new DataverseUserSearchService(webAPI), looked };
+    }
+
+    it("asks Dataverse for that user's name, and nothing else about them", async () => {
+        const { service, looked } = makeDirectory(() =>
+            Promise.resolve({ systemuserid: "u-alex", fullname: "Alex Rivera" })
+        );
+
+        await expect(service.resolveName("u-alex")).resolves.toBe("Alex Rivera");
+        expect(looked).toEqual([
+            { entity: "systemuser", id: "u-alex", options: "?$select=systemuserid,fullname" },
+        ]);
+    });
+
+    it("trims the name, as a display name may be stored padded", async () => {
+        const { service } = makeDirectory(() => Promise.resolve({ fullname: "  Alex Rivera  " }));
+
+        await expect(service.resolveName("u-alex")).resolves.toBe("Alex Rivera");
+    });
+
+    it("answers with nobody when the record carries no usable name", async () => {
+        for (const fullname of ["", "   ", undefined, null, 7]) {
+            const { service } = makeDirectory(() => Promise.resolve({ fullname }));
+
+            await expect(service.resolveName("u-alex")).resolves.toBeNull();
+        }
+    });
+
+    it("answers with nobody when the user cannot be read", async () => {
+        // Deleted, out of scope for this user, or simply unreachable: from here
+        // they are all the same answer, and none of them is a confirmation.
+        const { service } = makeDirectory(() =>
+            Promise.reject(new Error("denied at https://org-a1b2.example.invalid"))
+        );
+
+        await expect(service.resolveName("u-alex")).resolves.toBeNull();
+    });
+
+    it("keeps the environment out of the log when a lookup fails", async () => {
+        const noise: unknown[][] = [];
+        const record = (...args: unknown[]): void => {
+            noise.push(args);
+        };
+        const warn = jest.spyOn(console, "warn").mockImplementation(record);
+        const error = jest.spyOn(console, "error").mockImplementation(record);
+        const { service } = makeDirectory(() =>
+            Promise.reject(new Error("denied at https://org-a1b2.example.invalid"))
+        );
+
+        await service.resolveName("u-alex");
+
+        // A Dataverse failure carries the organisation URL and the schema names
+        // with it. None of that belongs anywhere a browser keeps it.
+        expect(noise).toEqual([]);
+        warn.mockRestore();
+        error.mockRestore();
+    });
+
+    it("is the platform-neutral directory the editor asks", async () => {
+        const { service } = makeDirectory(() => Promise.resolve({ fullname: "Alex Rivera" }));
+        const directory: UserDirectory = service;
+
+        await expect(directory.resolveName("u-alex")).resolves.toBe("Alex Rivera");
     });
 });

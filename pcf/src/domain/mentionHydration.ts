@@ -20,7 +20,7 @@
 
 import type { MentionOccurrence } from "./mentionLifecycle";
 import { MENTION_METADATA_SCHEMA_VERSION } from "./mentionMetadata";
-import { normalizeDataverseId } from "./recordContext";
+import { isDataverseId, normalizeDataverseId } from "./recordContext";
 
 /** What a stored payload turned out to be worth. */
 export interface HydratedMentions {
@@ -140,7 +140,9 @@ export function hydratePersistedMentions(
 
         const eventId = asString(event.eventId).toLowerCase();
         const recipientUserId = normalizeDataverseId(asString(event.recipientUserId));
-        if (!EVENT_ID.test(eventId) || recipientUserId.length === 0) {
+        // An id out of an untrusted payload ends up in a Web API call and, if it
+        // were believed, in a navigation. Neither is ever handed a non-id.
+        if (!EVENT_ID.test(eventId) || !isDataverseId(recipientUserId)) {
             return NOTHING;
         }
         // The same person twice is two claims on one episode.

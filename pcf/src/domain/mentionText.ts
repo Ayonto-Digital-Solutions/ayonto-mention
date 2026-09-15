@@ -320,7 +320,7 @@ export function splitTrackedMentions<T extends InsertedMention>(
     return segments;
 }
 
-/** A run of text, and the user it mentions when it is one. *//** A run of text, and the user it mentions when it is one. */
+/** A run of text, and the user it mentions when it is one. */
 export interface MentionSegment {
     readonly text: string;
     /**

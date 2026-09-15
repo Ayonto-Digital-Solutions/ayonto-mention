@@ -1,4 +1,5 @@
 import type {
+    UserDirectory,
     UserSearchProvider,
     UserSearchResult,
     UserSuggestion,
@@ -47,7 +48,7 @@ function isServiceAccount(entity: SystemUserRecord): boolean {
  * No `Xrm`, no form context, no undocumented API.
  * https://learn.microsoft.com/power-apps/developer/component-framework/reference/webapi
  */
-export class DataverseUserSearchService implements UserSearchProvider {
+export class DataverseUserSearchService implements UserSearchProvider, UserDirectory {
     private readonly webAPI: ComponentFramework.WebApi;
     private readonly pageSize: number;
 
@@ -93,6 +94,29 @@ export class DataverseUserSearchService implements UserSearchProvider {
                 "[AyontoMention] User lookup rejected the service-account filters; retrying without them."
             );
             return await this.query(filters, this.pageSize * 2 + 1);
+        }
+    }
+
+    /**
+     * The display name Dataverse holds for one user, or null when there is none.
+     *
+     * A single record read, asking for nothing but the id and the name. The
+     * failure is swallowed into `null` on purpose: the caller's question is
+     * "can this be confirmed", and an outage, a deleted user and a refused read
+     * all answer it the same way — not confirmed. The underlying error is never
+     * surfaced or logged; it can carry the environment URL with it.
+     */
+    public async resolveName(userId: string): Promise<string | null> {
+        try {
+            const record = await this.webAPI.retrieveRecord(
+                "systemuser",
+                userId,
+                "?$select=systemuserid,fullname"
+            );
+            const name = (record as { fullname?: unknown }).fullname;
+            return typeof name === "string" && name.trim().length > 0 ? name.trim() : null;
+        } catch {
+            return null;
         }
     }
 

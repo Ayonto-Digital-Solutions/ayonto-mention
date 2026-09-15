@@ -187,7 +187,7 @@ function press(key: string, caret: number, selectionEnd: number = caret): { star
 
 /** The read-mode surface, when the field is showing its mentions as people. */
 function reader(): HTMLElement | null {
-    return container.querySelector('[role="presentation"]');
+    return container.querySelector('[role="group"]');
 }
 
 /** Clicks the read-mode text, the way a user starts editing. */

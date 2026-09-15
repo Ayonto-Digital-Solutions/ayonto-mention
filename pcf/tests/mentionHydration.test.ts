@@ -149,11 +149,20 @@ describe("hydratePersistedMentions", () => {
     });
 
     it("refuses a recipient nobody can be identified from", () => {
-        const raw = payload([
-            { eventId: EVENT_A, recipientUserId: "   ", occurrences: [{ start: 6, length: 12 }] },
-        ]);
+        // Whatever this is, it is not something to look up or to navigate to.
+        for (const recipientUserId of [
+            "   ",
+            "u-alex",
+            `${USER_A}-extra`,
+            "aaaaaaaa-1111-2222-3333-44444444444",
+            "../systemuser",
+        ]) {
+            const raw = payload([
+                { eventId: EVENT_A, recipientUserId, occurrences: [{ start: 6, length: 12 }] },
+            ]);
 
-        expect(hydrate(raw).mentions).toEqual([]);
+            expect(hydrate(raw).mentions).toEqual([]);
+        }
     });
 
     it("refuses the same person claimed twice", () => {
