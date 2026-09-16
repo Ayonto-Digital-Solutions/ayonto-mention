@@ -28,15 +28,19 @@ from pathlib import Path
 
 SOLUTION_UNIQUE_NAME = "AyontoMention"
 SOLUTION_DISPLAY_NAME = "Ayonto Mention"
-#: The publisher's option value prefix, fixed rather than generated.
+#: The publisher's option value prefix, taken from the publisher that exists.
 #:
 #: `pac solution init` draws a new one every time it runs, so the same publisher
 #: would arrive at an environment wearing a different number in every release —
 #: and two builds of one commit would differ in their bytes for a reason that has
-#: nothing to do with what is being shipped. It is the range Dataverse derives
-#: option values from for choices created under this publisher, of which this
-#: solution creates none; what it needs to be is the same one every time.
-PUBLISHER_OPTION_VALUE_PREFIX = "45013"
+#: nothing to do with what is being shipped. So it is fixed.
+#:
+#: The value is not this repository's to invent: an `Ayonto` publisher already
+#: exists in the environments this product has to live in, carrying 14144, and a
+#: solution that named a different number for the same publisher would be asking
+#: to change it. v1.0.0 shipped 45013, decided before that constraint was known;
+#: from v1.0.1 the existing publisher is what this follows.
+PUBLISHER_OPTION_VALUE_PREFIX = "14144"
 #: The commented-out block `pac solution init` writes into every new cdsproj.
 COMMENTED_PACKAGE_TYPE = re.compile(
     r"[ \t]*<!--\s*\n"

@@ -78,7 +78,7 @@ let instanceCount = 0;
  * step turns the committed pair into notifications. A form that is discarded
  * commits neither, which is the whole point.
  */
-export class MentionControl implements ComponentFramework.ReactControl<IInputs, IOutputs> {
+export class AyontoMentionControl implements ComponentFramework.ReactControl<IInputs, IOutputs> {
     private notifyOutputChanged: () => void;
     private userSearch: UserSearchProvider & UserDirectory;
     private readonly listboxId: string;

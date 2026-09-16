@@ -38,12 +38,20 @@ from xml.etree import ElementTree
 SOLUTION_UNIQUE_NAME = "AyontoMention"
 PUBLISHER_UNIQUE_NAME = "Ayonto"
 PUBLISHER_PREFIX = "ayonto"
-#: Fixed by the release preparation, so one publisher does not arrive at an
-#: environment wearing a different number in every release.
-PUBLISHER_OPTION_VALUE_PREFIX = "45013"
-CONTROL_SCHEMA_NAME = "ayonto_Ayonto.MentionControl"
+#: The prefix the `Ayonto` publisher already carries where this product is
+#: installed. Fixed by the release preparation and checked here, so one publisher
+#: does not arrive at an environment wearing a different number each release.
+PUBLISHER_OPTION_VALUE_PREFIX = "14144"
+CONTROL_SCHEMA_NAME = "ayonto_Ayonto.AyontoMentionControl"
 CONTROL_NAMESPACE = "Ayonto"
-CONTROL_CONSTRUCTOR = "MentionControl"
+CONTROL_CONSTRUCTOR = "AyontoMentionControl"
+#: The productive legacy control, which lives in the same environments under the
+#: same publisher. This package must never carry it: the two components are not
+#: versions of one another — this one requires configuration the legacy contract
+#: has no place for — and a package claiming that identity would land on top of a
+#: control that forms are already using.
+LEGACY_CONTROL_SCHEMA_NAME = "ayonto_Ayonto.MentionControl"
+LEGACY_CONTROL_CONSTRUCTOR = "MentionControl"
 #: Type 66 is a custom control. See the solution component type table.
 CUSTOM_CONTROL_COMPONENT_TYPE = "66"
 #: Every file this release's packages may contain, and no others.
@@ -57,11 +65,11 @@ EXPECTED_FILES = frozenset(
         "[Content_Types].xml",
         "solution.xml",
         "customizations.xml",
-        "Controls/ayonto_Ayonto.MentionControl/ControlManifest.xml",
-        "Controls/ayonto_Ayonto.MentionControl/bundle.js",
-        "Controls/ayonto_Ayonto.MentionControl/bundle.js.LICENSE.txt",
-        "Controls/ayonto_Ayonto.MentionControl/strings/MentionControl.1033.resx",
-        "Controls/ayonto_Ayonto.MentionControl/strings/MentionControl.1031.resx",
+        "Controls/ayonto_Ayonto.AyontoMentionControl/ControlManifest.xml",
+        "Controls/ayonto_Ayonto.AyontoMentionControl/bundle.js",
+        "Controls/ayonto_Ayonto.AyontoMentionControl/bundle.js.LICENSE.txt",
+        "Controls/ayonto_Ayonto.AyontoMentionControl/strings/MentionControl.1033.resx",
+        "Controls/ayonto_Ayonto.AyontoMentionControl/strings/MentionControl.1031.resx",
     }
 )
 
@@ -162,10 +170,15 @@ def check_solution_manifest(
             f"root component type is {component.get('type')!r}, "
             f"expected {CUSTOM_CONTROL_COMPONENT_TYPE!r} (custom control)"
         )
-    if component.get("schemaName") != CONTROL_SCHEMA_NAME:
+    schema_name = component.get("schemaName")
+    if schema_name == LEGACY_CONTROL_SCHEMA_NAME:
         raise PackageError(
-            f"root component is {component.get('schemaName')!r}, "
-            f"expected {CONTROL_SCHEMA_NAME!r}"
+            f"the root component is {LEGACY_CONTROL_SCHEMA_NAME!r}, the productive "
+            "legacy control — importing this would replace it"
+        )
+    if schema_name != CONTROL_SCHEMA_NAME:
+        raise PackageError(
+            f"root component is {schema_name!r}, expected {CONTROL_SCHEMA_NAME!r}"
         )
 
 
@@ -187,6 +200,11 @@ def check_customizations(customizations_xml: bytes) -> None:
     if len(controls) != 1:
         raise PackageError(f"expected exactly one control, found {len(controls)}")
     name_element = controls[0].find("Name")
+    if name_element is not None and name_element.text == LEGACY_CONTROL_SCHEMA_NAME:
+        raise PackageError(
+            f"customizations.xml names {LEGACY_CONTROL_SCHEMA_NAME!r}, the productive "
+            "legacy control"
+        )
     if name_element is None or name_element.text != CONTROL_SCHEMA_NAME:
         raise PackageError(
             f"control is {name_element.text if name_element is not None else None!r}, "
@@ -203,8 +221,14 @@ def check_control_manifest(manifest_xml: bytes, control_version: str) -> None:
 
     if control.get("namespace") != CONTROL_NAMESPACE:
         raise PackageError(f"control namespace is {control.get('namespace')!r}")
-    if control.get("constructor") != CONTROL_CONSTRUCTOR:
-        raise PackageError(f"control constructor is {control.get('constructor')!r}")
+    constructor = control.get("constructor")
+    if constructor == LEGACY_CONTROL_CONSTRUCTOR:
+        raise PackageError(
+            f"the packaged control is {CONTROL_NAMESPACE}.{LEGACY_CONTROL_CONSTRUCTOR}, "
+            "which is the productive legacy control — this package would overwrite it"
+        )
+    if constructor != CONTROL_CONSTRUCTOR:
+        raise PackageError(f"control constructor is {constructor!r}")
 
     packaged = control.get("version")
     if packaged != control_version:
@@ -237,6 +261,18 @@ def check_package(path: str, version: str, control_version: str, managed: bool) 
             names = package.namelist()
             if package.testzip() is not None:
                 raise PackageError("the archive is damaged")
+
+            # Asked first, so that a package wearing the legacy identity is
+            # refused for that reason rather than for the eight files it is then
+            # also missing. This is the mistake worth naming precisely: the two
+            # components live in the same environments under the same publisher,
+            # and one of them is in productive use.
+            legacy = [name for name in names if LEGACY_CONTROL_SCHEMA_NAME in name]
+            if legacy:
+                raise PackageError(
+                    f"package carries {legacy[0]!r} — that is the productive legacy "
+                    "control, and this component must not claim its identity"
+                )
 
             # A zip may carry the same path twice, and a reader would see only
             # one of them. Counted rather than set-compared for that reason.

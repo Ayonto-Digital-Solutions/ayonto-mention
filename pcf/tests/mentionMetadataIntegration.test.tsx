@@ -2,7 +2,7 @@ import * as React from "react";
 import * as ReactDOM from "react-dom";
 import { Simulate, act } from "react-dom/test-utils";
 
-import { MentionControl } from "../MentionControl/index";
+import { AyontoMentionControl } from "../MentionControl/index";
 import type { IInputs, IOutputs } from "../MentionControl/generated/ManifestTypes";
 import type { MentionEditorProps } from "../src/components/MentionEditor";
 import type { MentionOccurrence } from "../src/domain/mentionLifecycle";
@@ -151,10 +151,10 @@ const originalScrollIntoView = Object.getOwnPropertyDescriptor(
 );
 
 function start(options: HostOptions = {}): {
-    control: MentionControl;
+    control: AyontoMentionControl;
     editor: MentionEditorProps;
 } {
-    const control = new MentionControl();
+    const control = new AyontoMentionControl();
     const context = makeContext(options);
     control.init(
         context,
@@ -170,7 +170,7 @@ function start(options: HostOptions = {}): {
 
 /** Renders and returns the props the adapter handed the editor. */
 function render(
-    control: MentionControl,
+    control: AyontoMentionControl,
     context: ComponentFramework.Context<IInputs>
 ): MentionEditorProps {
     let element: React.ReactElement | undefined;
@@ -185,7 +185,7 @@ function render(
 }
 
 function renderKey(
-    control: MentionControl,
+    control: AyontoMentionControl,
     context: ComponentFramework.Context<IInputs>
 ): string {
     let element: React.ReactElement | undefined;
@@ -234,11 +234,11 @@ function press(key: string): void {
 }
 
 /** The payload the control reports right now. */
-function payload(control: MentionControl): Payload {
+function payload(control: AyontoMentionControl): Payload {
     return JSON.parse(control.getOutputs().mentionMetadata ?? "") as Payload;
 }
 
-function eventIds(control: MentionControl): readonly string[] {
+function eventIds(control: AyontoMentionControl): readonly string[] {
     return payload(control).mentions.map((mention) => mention.eventId);
 }
 
@@ -278,7 +278,7 @@ afterEach(() => {
     }
 });
 
-describe("MentionControl text and metadata as one state", () => {
+describe("AyontoMentionControl text and metadata as one state", () => {
     it("has both outputs ready at the instant it tells the host about a pick", async () => {
         const host = makeHost();
         start({ webApi: host.webAPI, recordId: RECORD_A });
@@ -413,7 +413,7 @@ describe("MentionControl text and metadata as one state", () => {
     });
 });
 
-describe("MentionControl writes nothing itself", () => {
+describe("AyontoMentionControl writes nothing itself", () => {
     it("never writes to Dataverse for a mention", async () => {
         const host = makeHost();
         const { control, editor } = start({ webApi: host.webAPI, recordId: RECORD_A });
@@ -442,7 +442,7 @@ describe("MentionControl writes nothing itself", () => {
     });
 });
 
-describe("MentionControl on a record that is not saved yet", () => {
+describe("AyontoMentionControl on a record that is not saved yet", () => {
     it("carries a mention picked before the record has an id", () => {
         const { control, editor } = start({ recordId: "" });
 
@@ -465,7 +465,7 @@ describe("MentionControl on a record that is not saved yet", () => {
     });
 
     it("does not remount the editor when the record is first saved", () => {
-        const control = new MentionControl();
+        const control = new AyontoMentionControl();
         const context = makeContext({ recordId: "" });
         control.init(context, () => undefined, {});
         const before = renderKey(control, context);
@@ -476,7 +476,7 @@ describe("MentionControl on a record that is not saved yet", () => {
     });
 });
 
-describe("MentionControl notification episodes", () => {
+describe("AyontoMentionControl notification episodes", () => {
     it("counts one person mentioned twice as one notification", () => {
         const { control, editor } = start();
 
@@ -546,7 +546,7 @@ describe("MentionControl notification episodes", () => {
     });
 });
 
-describe("MentionControl record boundaries", () => {
+describe("AyontoMentionControl record boundaries", () => {
     it("forgets the notifications of the record it leaves", () => {
         const { control, editor } = start({ recordId: RECORD_A });
         edit(editor, "@Alex Rivera ", [alex]);
@@ -582,7 +582,7 @@ describe("MentionControl record boundaries", () => {
     });
 
     it("remounts the editor when the record changes", () => {
-        const control = new MentionControl();
+        const control = new AyontoMentionControl();
         const context = makeContext({ recordId: RECORD_A });
         control.init(context, () => undefined, {});
         const before = renderKey(control, context);
@@ -607,7 +607,7 @@ describe("MentionControl record boundaries", () => {
     });
 });
 
-describe("MentionControl host reconciliation", () => {
+describe("AyontoMentionControl host reconciliation", () => {
     it("does not let a stale host echo revert the local text or its payload", () => {
         const { control, editor } = start({ value: "A" });
         edit(editor, "A@Alex Rivera ", [{ ...alex, start: 1 }]);
@@ -679,7 +679,7 @@ describe("MentionControl host reconciliation", () => {
     });
 });
 
-describe("MentionControl output pairs", () => {
+describe("AyontoMentionControl output pairs", () => {
     it("does not let a stale companion echo roll the payload back, however often it repeats", () => {
         const M0 = '{"schemaVersion":1,"sourceField":"description","mentions":[]}';
         const { control, editor } = start({ value: "A", metadata: M0 });
@@ -780,7 +780,7 @@ describe("MentionControl output pairs", () => {
     });
 });
 
-describe("MentionControl instances on one form", () => {
+describe("AyontoMentionControl instances on one form", () => {
     it("keep their own payloads", () => {
         const first = start({ logicalName: "description" });
         const second = start({ logicalName: "ayonto_notes" });
@@ -802,7 +802,7 @@ describe("MentionControl instances on one form", () => {
     });
 });
 
-describe("MentionControl when the companion column may not be written", () => {
+describe("AyontoMentionControl when the companion column may not be written", () => {
     it("offers nobody, so no mention can be made that cannot be recorded", async () => {
         const host = makeHost();
         start({ webApi: host.webAPI, metadataEditable: false });

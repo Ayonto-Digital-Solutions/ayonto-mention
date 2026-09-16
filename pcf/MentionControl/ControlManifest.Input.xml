@@ -1,6 +1,17 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <manifest>
-  <control namespace="Ayonto" constructor="MentionControl" version="1.0.0" display-name-key="MentionControl_Display_Key" description-key="MentionControl_Desc_Key" control-type="virtual" >
+  <!-- The component is Ayonto.AyontoMentionControl, not Ayonto.MentionControl.
+
+       The productive legacy control already occupies Ayonto.MentionControl in
+       the environments this one has to live in, and the two are not versions of
+       each other: this component requires recordId, recordTable and
+       mentionMetadata, which the legacy contract does not have. An imported code
+       component may gain optional properties in a later version but not required
+       ones — the documented remedy is a component with a new name, reconfigured
+       where it is used. So this keeps the Ayonto namespace and takes a name of
+       its own, and the two can sit on the same form.
+       https://learn.microsoft.com/power-apps/developer/component-framework/faq -->
+  <control namespace="Ayonto" constructor="AyontoMentionControl" version="1.0.1" display-name-key="MentionControl_Display_Key" description-key="MentionControl_Desc_Key" control-type="virtual" >
     <!-- This control calls no third-party service. Mentions are looked up through
          the Dataverse Web API of the environment the control already runs in. -->
     <external-service-usage enabled="false">

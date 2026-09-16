@@ -268,10 +268,16 @@ Each release publishes two Dataverse solution packages:
 | `AyontoMention_<version>_managed.zip` | managed | any environment that is not where this control is developed — test, UAT, production |
 | `AyontoMention_<version>.zip` | unmanaged | a development environment, or to look inside the package |
 
-Both contain the same thing: the Ayonto Mention code component, published as
-`Ayonto` with the prefix `ayonto`, in the solution `AyontoMention`. Import the
-package, then add the control to a text column on a model-driven form and
-configure its properties as described above.
+Both contain the same thing: the Ayonto Mention code component
+`Ayonto.AyontoMentionControl`, published as `Ayonto` with the prefix `ayonto`, in
+the solution `AyontoMention`. Import the package, then add the control to a text
+column on a model-driven form and configure its properties as described above.
+
+**It installs beside an older Ayonto mention control rather than over it.** The
+earlier product occupies `Ayonto.MentionControl`; this one has a name of its own
+because it requires configuration that the older contract has no place for, and a
+code component cannot gain required properties in a later version. Both can be
+present in one environment, and a form can carry either.
 
 **What v1.0.0 contains.** The client only:
 

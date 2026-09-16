@@ -9,25 +9,39 @@ This tree holds the **YAML source-control format** for the Dataverse solution.
 | Solution unique name         | `AyontoMention` |
 | Publisher                    | `Ayonto`        |
 | Publisher prefix             | `ayonto`        |
-| Publisher choice value prefix | `45013`         |
+| Publisher choice value prefix | `14144`         |
+| Code component                | `Ayonto.AyontoMentionControl` |
 
-**The choice value prefix is a decision, not a discovery.** Dataverse derives the
-values of choices created under a publisher from it, and `pac solution init`
-picks a new one every time it runs — so without fixing it, the same publisher
-would arrive at an environment wearing a different number in each release, and
-two builds of one commit would differ for a reason that has nothing to do with
-what is being shipped. `45013` is the value this product uses. The release
-packaging sets it and the package checker enforces it.
+**The choice value prefix is taken from the publisher that already exists.**
+Dataverse derives the values of choices created under a publisher from it, and
+`pac solution init` picks a new one every time it runs — so without fixing it,
+the same publisher would arrive at an environment wearing a different number in
+each release. It therefore has to be fixed, and it is not this repository's to
+invent: an `Ayonto` publisher is already in productive use with `14144`, and a
+solution naming a different number for the same publisher would be asking to
+change it.
 
-It has to stay the same across releases. When the real solution and publisher are
-exported from the Ayonto DEV environment into this tree, the exported publisher
-must carry `45013` too. If a Dataverse environment ever turns out to hold an
-`Ayonto` publisher with a different choice value prefix, **stop and reconcile the
-two deliberately** — do not quietly change either side, because the value is part
-of how existing choices keep their meaning.
+v1.0.0 shipped `45013`, chosen here before that was known. From v1.0.1 the
+existing publisher is what this follows; **v1.0.0 stays as published** and is not
+rewritten. The release packaging sets `14144` and the package checker enforces it.
 
-The current v1.0.0 package creates no choices at all; the convention is recorded
-now because v1.0.0 is what establishes the publisher.
+It has to stay the same from here on. When the real solution and publisher are
+exported from a Dataverse environment into this tree, the exported publisher must
+carry `14144` too. If an environment ever turns out to hold an `Ayonto` publisher
+with a different prefix, **stop and reconcile deliberately** — do not quietly
+change either side, because the value is part of how existing choices keep their
+meaning.
+
+This client-only package creates no choices at all.
+
+**The component name is also a coexistence decision.** The productive legacy
+mention control occupies `Ayonto.MentionControl` under this same publisher, and
+the two are not versions of one another: this one requires `recordId`,
+`recordTable` and `mentionMetadata`, which the legacy contract has no place for,
+and a code component may gain optional properties in a later version but not
+required ones. So this product is `Ayonto.AyontoMentionControl` — same vendor
+namespace, its own name, no version number baked into it — and both controls can
+be installed in one environment and put on one form.
 
 ## Reserved layout
 

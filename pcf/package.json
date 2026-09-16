@@ -1,6 +1,6 @@
 {
   "name": "ayonto-mention-pcf",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Power Apps component framework project for the Ayonto Mention control.",
   "license": "MIT",

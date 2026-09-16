@@ -2,7 +2,7 @@ import * as React from "react";
 import * as ReactDOM from "react-dom";
 import { Simulate, act } from "react-dom/test-utils";
 
-import { MentionControl } from "../MentionControl/index";
+import { AyontoMentionControl } from "../MentionControl/index";
 import type { IInputs } from "../MentionControl/generated/ManifestTypes";
 import type { MentionEditorProps } from "../src/components/MentionEditor";
 import { resourceValue } from "./support/resources";
@@ -158,10 +158,10 @@ let notifyCount = 0;
  * arrive — which is exactly what a user sees: text first, people a moment later.
  */
 async function start(options: HostOptions = {}): Promise<{
-    control: MentionControl;
+    control: AyontoMentionControl;
     editor: MentionEditorProps;
 }> {
-    const control = new MentionControl();
+    const control = new AyontoMentionControl();
     const context = makeContext(options);
     control.init(
         context,
@@ -176,7 +176,7 @@ async function start(options: HostOptions = {}): Promise<{
 }
 
 function render(
-    control: MentionControl,
+    control: AyontoMentionControl,
     context: ComponentFramework.Context<IInputs>
 ): MentionEditorProps {
     let element: React.ReactElement | undefined;
@@ -1023,7 +1023,7 @@ describe("the same words, a different person", () => {
         }[];
     }
 
-    const written = (control: MentionControl): Written =>
+    const written = (control: AyontoMentionControl): Written =>
         JSON.parse(control.getOutputs().mentionMetadata ?? "") as Written;
 
     it("follows the metadata when the text does not change at all", async () => {

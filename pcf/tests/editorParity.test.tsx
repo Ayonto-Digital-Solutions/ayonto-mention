@@ -2,7 +2,7 @@ import * as React from "react";
 import * as ReactDOM from "react-dom";
 import { Simulate, act } from "react-dom/test-utils";
 
-import { MentionControl } from "../MentionControl/index";
+import { AyontoMentionControl } from "../MentionControl/index";
 import type { IInputs } from "../MentionControl/generated/ManifestTypes";
 import type { MentionEditorProps } from "../src/components/MentionEditor";
 import type { MentionOccurrence } from "../src/domain/mentionLifecycle";
@@ -110,10 +110,10 @@ let container: HTMLDivElement;
 let notifyCount = 0;
 
 function start(options: HostOptions = {}): {
-    control: MentionControl;
+    control: AyontoMentionControl;
     editor: MentionEditorProps;
 } {
-    const control = new MentionControl();
+    const control = new AyontoMentionControl();
     const context = makeContext(options);
     control.init(
         context,
@@ -126,7 +126,7 @@ function start(options: HostOptions = {}): {
 }
 
 function render(
-    control: MentionControl,
+    control: AyontoMentionControl,
     context: ComponentFramework.Context<IInputs>
 ): MentionEditorProps {
     let element: React.ReactElement | undefined;
@@ -277,7 +277,7 @@ describe("a column the user may not read", () => {
     });
 
     it("shows the value again once the column becomes readable", () => {
-        const control = new MentionControl();
+        const control = new AyontoMentionControl();
         const context = makeContext({ value: SECRET, readable: false });
         control.init(context, () => undefined, {});
         render(control, context);
@@ -294,7 +294,7 @@ describe("masking a column that is already being edited", () => {
         readonly mentions: readonly { readonly eventId: string }[];
     }
 
-    const parse = (control: MentionControl): Payload =>
+    const parse = (control: AyontoMentionControl): Payload =>
         JSON.parse(control.getOutputs().mentionMetadata ?? "") as Payload;
 
     /**
@@ -304,7 +304,7 @@ describe("masking a column that is already being edited", () => {
      */
     const OPENING = "Note. ";
 
-    async function pickAlex(control: MentionControl, host: Host): Promise<void> {
+    async function pickAlex(control: AyontoMentionControl, host: Host): Promise<void> {
         type(`${OPENING}@Al`);
         advance(MENTION_SEARCH_DEBOUNCE_MS);
         await host.settleSearch(0, [{ id: alex.userId, name: alex.name }]);
@@ -316,7 +316,7 @@ describe("masking a column that is already being edited", () => {
 
     it("keeps text, metadata and identity across mask and unmask", async () => {
         const host = makeHost();
-        const control = new MentionControl();
+        const control = new AyontoMentionControl();
         const context = makeContext({ webApi: host.webAPI, readable: true, value: OPENING });
         control.init(
             context,
@@ -366,7 +366,7 @@ describe("masking a column that is already being edited", () => {
 
     it("still deletes the tracked mention whole after unmasking", async () => {
         const host = makeHost();
-        const control = new MentionControl();
+        const control = new AyontoMentionControl();
         const context = makeContext({ webApi: host.webAPI, readable: true, value: OPENING });
         control.init(context, () => undefined, {});
         render(control, context);
@@ -385,7 +385,7 @@ describe("masking a column that is already being edited", () => {
 
     it("survives being masked while the field has focus", async () => {
         const host = makeHost();
-        const control = new MentionControl();
+        const control = new AyontoMentionControl();
         const context = makeContext({ webApi: host.webAPI, readable: true, value: OPENING });
         control.init(
             context,
