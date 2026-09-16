@@ -259,6 +259,46 @@ without a lookup: the query is retried without them and the accounts are removed
 from the result instead. Mailbox validation belongs to the designed notification
 pipeline and is not implemented yet.
 
+## Installation
+
+Each release publishes two Dataverse solution packages:
+
+| File | Type | Use it for |
+|---|---|---|
+| `AyontoMention_<version>_managed.zip` | managed | any environment that is not where this control is developed — test, UAT, production |
+| `AyontoMention_<version>.zip` | unmanaged | a development environment, or to look inside the package |
+
+Both contain the same thing: the Ayonto Mention code component, published as
+`Ayonto` with the prefix `ayonto`, in the solution `AyontoMention`. Import the
+package, then add the control to a text column on a model-driven form and
+configure its properties as described above.
+
+**What v1.0.0 contains.** The client only:
+
+- the mention field itself — picker, keyboard, IME-safe editing, atomic
+  mention deletion, character counter
+- saved mention identity, confirmed against Dataverse, and the read view that
+  shows confirmed mentions as people
+- suggestion popup positioned against the viewport
+- `minRows` field-height fallback
+- English and German resources
+- offline, masking, read-only and column-security behaviour
+
+**What it does not contain**, because it does not exist yet: the
+`ayonto_mention` event ledger, the ingest and dispatcher flows, e-mail delivery,
+Teams delivery, and any delivery configuration or state. **Installing this
+release does not send notifications.** The control records who was mentioned;
+turning that into a message is the server-side work still ahead.
+
+**What publishing v1.0.0 does and does not say.** It is released as the client
+component: the packages are built, checked and downloadable. It is not a
+statement that any environment has been validated. The automated suite cannot
+prove how a field behaves in a browser on a form — jsdom performs no layout — so
+before calling a particular deployment validated or production-ready, install the
+package in a real model-driven app and work through the behaviour there: field
+height and resizing, the read and edit views, the suggestion popup against the
+viewport, tokens and navigation, keyboard paths, masking, read-only and offline.
+
 ## Requirements
 
 - Microsoft Dataverse
