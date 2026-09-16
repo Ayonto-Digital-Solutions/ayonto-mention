@@ -2,7 +2,7 @@ import * as React from "react";
 import * as ReactDOM from "react-dom";
 import { Simulate, act } from "react-dom/test-utils";
 
-import { MentionControl } from "../MentionControl/index";
+import { AyontoMentionControl } from "../MentionControl/index";
 import type { IInputs } from "../MentionControl/generated/ManifestTypes";
 import type { MentionEditorProps } from "../src/components/MentionEditor";
 import type { MentionRecordContext } from "../src/domain/recordContext";
@@ -115,10 +115,10 @@ const originalScrollIntoView = Object.getOwnPropertyDescriptor(
 );
 
 function start(options: HostOptions = {}): {
-    control: MentionControl;
+    control: AyontoMentionControl;
     context: ComponentFramework.Context<IInputs>;
 } {
-    const control = new MentionControl();
+    const control = new AyontoMentionControl();
     const context = makeContext(options);
     control.init(
         context,
@@ -131,7 +131,7 @@ function start(options: HostOptions = {}): {
     return { control, context };
 }
 
-function render(control: MentionControl, context: ComponentFramework.Context<IInputs>): void {
+function render(control: AyontoMentionControl, context: ComponentFramework.Context<IInputs>): void {
     act(() => {
         ReactDOM.render(control.updateView(context), container);
     });
@@ -183,13 +183,13 @@ function advance(ms: number = MENTION_SEARCH_DEBOUNCE_MS): void {
  * only so a test can look inside, and the persistence step will read the field
  * directly from within the class.
  */
-function recordContextOf(control: MentionControl): MentionRecordContext | null {
+function recordContextOf(control: AyontoMentionControl): MentionRecordContext | null {
     return (control as unknown as { recordContext: MentionRecordContext | null }).recordContext;
 }
 
 /** Reads the props the adapter hands to the editor, without rendering them. */
 function editorProps(
-    control: MentionControl,
+    control: AyontoMentionControl,
     context: ComponentFramework.Context<IInputs>
 ): MentionEditorProps {
     return control.updateView(context).props as MentionEditorProps;
@@ -224,7 +224,7 @@ afterEach(() => {
     }
 });
 
-describe("MentionControl adapter", () => {
+describe("AyontoMentionControl adapter", () => {
     it("renders the bound value it was initialized with", () => {
         start({ value: "Hello from the host" });
 
@@ -424,8 +424,8 @@ describe("MentionControl adapter", () => {
     });
 
     it("gives two controls on one form different listbox ids", () => {
-        const first = new MentionControl();
-        const second = new MentionControl();
+        const first = new AyontoMentionControl();
+        const second = new AyontoMentionControl();
         const context = makeContext({ value: "A" });
         first.init(context, () => undefined, {});
         second.init(context, () => undefined, {});
@@ -497,7 +497,7 @@ describe("MentionControl adapter", () => {
     });
 });
 
-describe("MentionControl record context", () => {
+describe("AyontoMentionControl record context", () => {
     const GUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 
     it("resolves a configured record into a normalized context", () => {
