@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
     Avatar,
+    FluentProvider,
     InteractionTag,
     InteractionTagPrimary,
     MessageBar,
@@ -13,8 +14,10 @@ import {
     makeStyles,
     mergeClasses,
     tokens,
+    webDarkTheme,
+    webLightTheme,
 } from "@fluentui/react-components";
-import type { PositioningProps } from "@fluentui/react-components";
+import type { PositioningProps, Theme } from "@fluentui/react-components";
 
 import { SuggestionList } from "./SuggestionList";
 import {
@@ -169,6 +172,25 @@ export interface MentionEditorProps {
      * mentions; they are simply not something to click.
      */
     readonly onOpenUser?: ((userId: string) => void) | undefined;
+    /**
+     * The host application's own Fluent theme, for the suggestion popup.
+     *
+     * The popup is portalled out of this subtree, and CSS custom properties do
+     * **not** cross a portal by inheritance: a portalled element is a child of
+     * the document body, not of anything this component rendered. Fluent's
+     * answer is to copy the theme class onto the portal node, and it takes that
+     * class from the nearest `FluentProvider` in the *React* tree. So the theme
+     * has to be handed in rather than inherited, and a provider has to sit above
+     * the popover for the tokens on the surface to resolve at all.
+     *
+     * Left out, the editor falls back to Fluent's own web theme. That is the one
+     * place this component picks a theme rather than being told one, and it is
+     * deliberate: a popup with no tokens has no background, and an unreadable
+     * list is worse than one whose greys are a shade off.
+     */
+    readonly theme?: Theme | undefined;
+    /** Which way the fallback leans when the host supplies no theme. */
+    readonly isDarkTheme?: boolean | undefined;
 }
 
 /** What the editor holds right now: the text, and who is mentioned in it. */
@@ -204,12 +226,18 @@ export const MENTION_POPUP_POSITIONING: PositioningProps = {
 
 const useStyles = makeStyles({
     /**
-     * The positioned surface the suggestions are drawn on.
+     * The positioned surface the suggestions are drawn on, and the one card in
+     * the popup.
      *
-     * Fluent draws a card here — background, border, rounded corners, a drop
-     * shadow and 16px of padding — and the list already is that card. Everything
-     * visible is turned off, so the surface is nothing but a place in the
-     * viewport to put the list, and the list is what the user sees.
+     * It used to be the opposite: the surface was turned fully transparent and
+     * the list inside it drew the card. That works only where the list's own
+     * `colorNeutralBackground1` resolves, and inside a portal it does not
+     * resolve unless a theme provider put the tokens there — which is why the
+     * popup came up see-through in a real model-driven app. One layer owns the
+     * card now, and it is the one the theme reaches first.
+     *
+     * Everything here is a Fluent token, so it follows the host's theme in both
+     * light and dark rather than freezing a colour.
      *
      * The width rules recreate the legacy control's proportions without asking
      * the browser how big the viewport is: Fluent matches the field's width, the
@@ -217,14 +245,35 @@ const useStyles = makeStyles({
      * the maximum keeps the list off the edges of a small screen.
      */
     surface: {
-        backgroundColor: "transparent",
-        border: "none",
-        borderRadius: 0,
-        boxShadow: "none",
-        filter: "none",
+        backgroundColor: tokens.colorNeutralBackground1,
+        border: `1px solid ${tokens.colorNeutralStroke1}`,
+        borderRadius: tokens.borderRadiusMedium,
+        boxShadow: tokens.shadow16,
         maxWidth: "calc(100vw - 16px)",
         minWidth: "min(300px, calc(100vw - 16px))",
-        padding: 0,
+        // Written as the shorthand, like the `padding: 0` it replaces: Fluent's
+        // own surface sets `padding` too, and matching its form is what makes
+        // the override deterministic rather than a question of which bucket
+        // Griffel emitted first. The list supplies the inset along the rows.
+        padding: `${tokens.spacingVerticalXXS} 0`,
+    },
+    /**
+     * The theme provider that exists so the portalled popup is themed at all.
+     *
+     * `display: contents` on purpose: this element is here for its class and its
+     * React context, not to be seen. Fluent's provider root otherwise paints a
+     * background and imposes `body1` type on whatever it wraps, and neither
+     * belongs around the field. With no box it is not a flex item either, so it
+     * cannot open a gap in the column it sits in — and since the popup is
+     * portalled, the provider has no rendered children to lose.
+     */
+    provider: {
+        display: "contents",
+    },
+    /** The waiting state stands where the answer will, so it needs the same inset. */
+    spinner: {
+        paddingBlock: tokens.spacingVerticalS,
+        paddingInline: tokens.spacingHorizontalS,
     },
     root: {
         display: "flex",
@@ -398,6 +447,18 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
      */
     const minRows = props.minRows ?? DEFAULT_FIELD_ROWS;
     const minFieldHeight = `calc(${minRows.toString()} * ${tokens.lineHeightBase300} + ${tokens.spacingVerticalSNudge} * 2)`;
+    /**
+     * The theme the popup is drawn in: the host's own, or Fluent's web theme
+     * where the host offers none.
+     *
+     * Not memoized on the theme object itself — a host is free to hand over a
+     * fresh object on every render, and comparing token bags would cost more
+     * than it saves. What matters is that a theme is always present, because a
+     * provider without one gives the portal a class that defines no tokens,
+     * which is the very failure this is here to prevent.
+     */
+    const popupTheme: Theme =
+        props.theme ?? (props.isDarkTheme === true ? webDarkTheme : webLightTheme);
     const { userSearchProvider, value } = props;
     const strings = props.strings ?? DEFAULT_MENTION_EDITOR_STRINGS;
     const listboxId = props.listboxId ?? DEFAULT_LISTBOX_ID;
@@ -1229,35 +1290,53 @@ export const MentionEditor: React.FC<MentionEditorProps> = (props) => {
               * opinion about when a list is open is how a list starts closing
               * under the person typing into it.
               */}
-            <Popover
-                open={isOpen}
-                positioning={popupPositioning}
-                // The list is not a dialog. Focus stays in the textarea, which
-                // is what moves through the options and picks one; a surface
-                // that focused itself would take the caret out of the sentence
-                // being written.
-                trapFocus={false}
-                unstable_disableAutoFocus
-            >
-                <PopoverSurface className={styles.surface}>
-                    {isListRendered ? (
-                        <SuggestionList
-                            activeIndex={activeIndex}
-                            emptyLabel={strings.noResults}
-                            id={listboxId}
-                            moreLabel={hasMore ? strings.moreResults : undefined}
-                            onHover={setActiveIndex}
-                            onSelect={select}
-                            optionId={optionId}
-                            suggestions={suggestions}
-                        />
-                    ) : (
-                        // The waiting state belongs in the same place the
-                        // answer will appear, not under the field.
-                        <Spinner label={strings.searching} labelPosition="after" size="tiny" />
-                    )}
-                </PopoverSurface>
-            </Popover>
+            {/*
+              * The provider is what makes the portalled popup themed.
+              *
+              * Fluent copies the nearest provider's class onto the portal node
+              * it creates on the body, so a provider anywhere above the popover
+              * in the React tree reaches it — but only through that copy, never
+              * by CSS inheritance. It therefore has to be here, around the
+              * popover, rather than inside the surface: a provider nested in the
+              * surface would theme the list and leave the surface itself, the
+              * card, without tokens.
+              */}
+            <FluentProvider className={styles.provider} theme={popupTheme}>
+                <Popover
+                    open={isOpen}
+                    positioning={popupPositioning}
+                    // The list is not a dialog. Focus stays in the textarea, which
+                    // is what moves through the options and picks one; a surface
+                    // that focused itself would take the caret out of the sentence
+                    // being written.
+                    trapFocus={false}
+                    unstable_disableAutoFocus
+                >
+                    <PopoverSurface className={styles.surface}>
+                        {isListRendered ? (
+                            <SuggestionList
+                                activeIndex={activeIndex}
+                                emptyLabel={strings.noResults}
+                                id={listboxId}
+                                moreLabel={hasMore ? strings.moreResults : undefined}
+                                onHover={setActiveIndex}
+                                onSelect={select}
+                                optionId={optionId}
+                                suggestions={suggestions}
+                            />
+                        ) : (
+                            // The waiting state belongs in the same place the
+                            // answer will appear, not under the field.
+                            <Spinner
+                                className={styles.spinner}
+                                label={strings.searching}
+                                labelPosition="after"
+                                size="tiny"
+                            />
+                        )}
+                    </PopoverSurface>
+                </Popover>
+            </FluentProvider>
 
             <div className={styles.footer}>
                 {props.notice !== undefined ? (

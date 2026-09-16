@@ -32,6 +32,15 @@ interface HostOptions {
     readonly metadata?: string;
     /** Set when the host states whether the companion column may be written. */
     readonly metadataEditable?: boolean;
+    /**
+     * The platform's Fluent theme, as a host with modern theming reports it.
+     * Left out together with `isDarkTheme`, the host reports no design language
+     * at all — which is what an older host, or an app with modern theming
+     * switched off, looks like.
+     */
+    readonly designTheme?: Record<string, string>;
+    /** What the host says about dark mode. */
+    readonly isDarkTheme?: boolean;
 }
 
 /** Records every Web API call the control makes. */
@@ -102,6 +111,13 @@ function makeContext(options: HostOptions = {}): ComponentFramework.Context<IInp
         resources: { getString: (id: string) => resourceValue(id) },
         formatting: { formatInteger: (value: number) => value.toString() },
         webAPI: options.webApi ?? makeWebApi(),
+        // Optional in the framework's own typings, so a host may report nothing
+        // here at all. Both halves are left out together, because a host that
+        // has no design language has no dark-mode flag either.
+        fluentDesignLanguage:
+            options.designTheme === undefined && options.isDarkTheme === undefined
+                ? undefined
+                : { tokenTheme: options.designTheme, isDarkTheme: options.isDarkTheme },
     } as unknown as ComponentFramework.Context<IInputs>;
 }
 
@@ -421,6 +437,39 @@ describe("AyontoMentionControl adapter", () => {
         start({ value: "A", label: "   " });
 
         expect(field().getAttribute("aria-label")).toBe("Ayonto Mention");
+    });
+
+    it("hands the platform's Fluent theme to the editor", () => {
+        // The suggestion list is portalled out of the control's subtree, and a
+        // portal inherits no CSS custom properties. Fluent themes it from the
+        // nearest provider in the React tree, so the theme has to travel as a
+        // prop — the editor cannot find it on its own.
+        const designTheme = { colorNeutralBackground1: "rgb(1, 2, 3)" };
+        const { control, context } = start({ designTheme, isDarkTheme: true });
+
+        const props = editorProps(control, context);
+        expect(props.theme).toBe(designTheme);
+        expect(props.isDarkTheme).toBe(true);
+    });
+
+    it("says nothing about a theme when the host reports no design language", () => {
+        // An older host, or an app with modern theming switched off. The adapter
+        // passes the absence on rather than inventing a theme: choosing one is
+        // the editor's fallback to make, and it is documented there.
+        const { control, context } = start();
+
+        const props = editorProps(control, context);
+        expect(props.theme).toBeUndefined();
+        expect(props.isDarkTheme).toBeUndefined();
+    });
+
+    it("follows a theme the host changes under a running control", () => {
+        // Read on every update rather than captured once: an app's theme can
+        // change while a control is alive, and the popup has to follow it.
+        const { control } = start({ designTheme: { colorNeutralBackground1: "rgb(1, 2, 3)" } });
+        const dark = { colorNeutralBackground1: "rgb(9, 9, 9)" };
+
+        expect(editorProps(control, makeContext({ designTheme: dark })).theme).toBe(dark);
     });
 
     it("gives two controls on one form different listbox ids", () => {

@@ -23,17 +23,22 @@ export interface SuggestionListProps {
 }
 
 const useStyles = makeStyles({
+    /**
+     * The options, and only the options.
+     *
+     * This used to draw the popup's card — background, border, corners, shadow —
+     * while the surface around it was made transparent. That put the card on the
+     * inner of two layers, and inside a portal the tokens it needed were not
+     * always there to resolve, so in a real model-driven app the popup came up
+     * see-through. The card now belongs to the `PopoverSurface`; what is left
+     * here is the list itself, its height, and its scrolling.
+     */
     list: {
-        backgroundColor: tokens.colorNeutralBackground1,
-        border: `1px solid ${tokens.colorNeutralStroke1}`,
-        borderRadius: tokens.borderRadiusMedium,
-        boxShadow: tokens.shadow16,
         listStyleType: "none",
-        marginBlock: tokens.spacingVerticalXXS,
+        margin: 0,
         maxHeight: "260px",
         overflowY: "auto",
-        paddingInlineStart: 0,
-        paddingBlock: tokens.spacingVerticalXXS,
+        padding: 0,
     },
     option: {
         alignItems: "center",

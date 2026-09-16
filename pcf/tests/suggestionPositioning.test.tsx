@@ -270,24 +270,38 @@ describe("where the suggestions are drawn", () => {
         });
     });
 
-    it("is a place to put the list, not a second card around it", async () => {
+    it("is the one card in the popup, and the list is not a second one", async () => {
         const search = controllableProvider();
         render(props({ userSearchProvider: search.provider }));
         await openWith(search, [dana]);
 
-        // Fluent's surface draws its own card — padding, background, a shadow.
-        // The list is already that card, so the surface gives up its own rather
-        // than framing a frame.
+        // This is the inverse of what this file asserted before, and deliberately
+        // so. The surface used to be turned transparent while the list inside it
+        // drew the card; in a real model-driven app that popup came up
+        // see-through, because the list's background token does not resolve
+        // inside a portal unless something put the theme there. The card belongs
+        // to the surface now — the layer the theme reaches first — and the list
+        // keeps only its rows.
         const chrome = window.getComputedStyle(requiredSurface());
-        expect(chrome.padding).toBe("0px");
-        expect(chrome.backgroundColor).toBe("rgba(0, 0, 0, 0)");
-        expect(chrome.filter).toBe("none");
-        expect(chrome.boxShadow).toBe("none");
-        // And exactly one thing scrolls: the list itself.
-        expect(chrome.overflowY === "" || chrome.overflowY === "visible").toBe(true);
+        expect(chrome.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+        expect(chrome.backgroundColor).not.toBe("transparent");
+        expect(chrome.backgroundColor).not.toBe("");
+
         const list = listbox();
-        expect(list).not.toBeNull();
-        expect(list === null ? "" : window.getComputedStyle(list).overflowY).toBe("auto");
+        if (list === null) {
+            throw new Error("no listbox is open");
+        }
+        const inner = window.getComputedStyle(list);
+        // No competing card: no background, no border, no shadow of its own.
+        expect(inner.backgroundColor === "" || inner.backgroundColor === "rgba(0, 0, 0, 0)").toBe(
+            true
+        );
+        expect(inner.boxShadow === "" || inner.boxShadow === "none").toBe(true);
+        expect(inner.padding === "" || inner.padding === "0px").toBe(true);
+
+        // And exactly one thing still scrolls: the list itself.
+        expect(chrome.overflowY === "" || chrome.overflowY === "visible").toBe(true);
+        expect(inner.overflowY).toBe("auto");
     });
 
     it("draws nothing at all while there is nothing to offer", () => {
