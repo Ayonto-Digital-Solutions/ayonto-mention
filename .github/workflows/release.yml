@@ -170,8 +170,11 @@ jobs:
           node --version
           npm --version
           dotnet --version
-          pac --version
-          installed=$(pac --version | sed -n 's/^Version: \([0-9.]*\).*/\1/p')
+          # `pac --version` prints the version and then exits 1: it is not a
+          # command pac accepts, so it falls through to its help. `pac help`
+          # prints the same banner and exits 0.
+          pac help | head -2
+          installed=$(pac help | sed -n 's/^Version: \([0-9.]*\).*/\1/p')
           if [ "${installed}" != "${PAC_VERSION}" ]; then
             echo "::error::pac is ${installed}, expected ${PAC_VERSION}"
             exit 1
