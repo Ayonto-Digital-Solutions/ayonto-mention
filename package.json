@@ -1,6 +1,6 @@
 {
   "name": "ayonto-mention",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "@mention component and notification framework for Microsoft Power Apps and Dataverse.",
   "license": "MIT",
