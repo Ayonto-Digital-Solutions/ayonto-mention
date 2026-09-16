@@ -14,15 +14,16 @@ import { resourceValue } from "./support/resources";
  *
  * A model-driven form does not tell a code component how tall the maker drew the
  * field, so the maker configures a row count instead. What is checked here is
- * that the configured number survives the trip — clamped, defaulted, and given
- * to the field and to the read surface as one and the same *contract*.
+ * that the configured number survives the trip — clamped, defaulted, and set on
+ * the textarea, which is the one box this field has — and that the read view
+ * overlays that box instead of becoming a second one with a height of its own.
  *
- * That is the whole claim. These tests do not show that the two views render to
- * the same height, or that a field never jumps when it changes between reading
- * and writing: jsdom lays nothing out, so every box it is asked about is zero,
- * and a test asserting rendered heights here would assert jsdom's zeros rather
- * than anything about Power Apps. The rendered result belongs to a browser and
- * is on the checklist for the DEV environment.
+ * That is the whole claim. These tests do not show what the field looks like, or
+ * that it never jumps when it changes between reading and writing: jsdom lays
+ * nothing out, so every box it is asked about is zero, and a test asserting
+ * rendered heights here would assert jsdom's zeros rather than anything about
+ * Power Apps. The rendered result belongs to a browser and is on the checklist
+ * for the DEV environment.
  */
 
 const RECORD_A = "aaaaaaaa-1111-2222-3333-444444444444";

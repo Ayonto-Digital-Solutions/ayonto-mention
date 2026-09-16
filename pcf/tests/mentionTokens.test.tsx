@@ -217,6 +217,15 @@ function requiredField(): HTMLTextAreaElement {
  * mounted underneath, covered and hidden from assistive technology — so "is
  * there a textarea" no longer answers "is this field being edited". This does.
  */
+/** The field underneath the people view, which stays mounted while it is up. */
+function requiredCoveredField(): HTMLTextAreaElement {
+    const element = field();
+    if (element === null) {
+        throw new Error("the field was taken away");
+    }
+    return element;
+}
+
 function isEditing(): boolean {
     const element = field();
 
@@ -435,8 +444,10 @@ describe("opening the person a mention names", () => {
         const host = makeHost();
         await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
 
-        // The token is a button: the browser turns Enter and Space into a click,
-        // and the element is reachable by Tab because nothing removes it.
+        // The token is a button, and a browser turns Enter and Space on a focused
+        // button into a click. jsdom does not do that on its own, so the click is
+        // the part represented here; the keys themselves are routed in the tests
+        // below. The element is reachable by Tab because nothing removes it.
         expect(tokenAt(0).tagName).toBe("BUTTON");
         expect(tokenAt(0).getAttribute("tabindex")).not.toBe("-1");
         act(() => {
@@ -444,6 +455,49 @@ describe("opening the person a mention names", () => {
         });
 
         expect(host.opened).toHaveLength(1);
+        // And the field it was pressed in is still being read, not edited.
+        expect(isEditing()).toBe(false);
+    });
+
+    it("leaves Enter on a person to that person", async () => {
+        const host = makeHost();
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+        const token = tokenAt(0);
+        token.focus();
+
+        // The key really does travel up to the surface the tokens sit on — that
+        // surface answers to Enter itself — so the handler there has to be able
+        // to tell a key meant for it from one meant for a person inside it.
+        act(() => {
+            Simulate.keyDown(token, { key: "Enter" });
+        });
+
+        expect(isEditing()).toBe(false);
+        expect(reader()).not.toBeNull();
+        expect(requiredCoveredField().getAttribute("aria-hidden")).toBe("true");
+
+        // What the browser would then do with that key on a button: activate it.
+        act(() => {
+            Simulate.click(token, { detail: 0 });
+        });
+
+        expect(host.opened).toEqual([{ entityName: "systemuser", entityId: USER_A }]);
+        expect(isEditing()).toBe(false);
+    });
+
+    it("leaves Space on a person to that person", async () => {
+        const host = makeHost();
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+        const token = tokenAt(0);
+        token.focus();
+
+        act(() => {
+            Simulate.keyDown(token, { key: " " });
+        });
+
+        expect(isEditing()).toBe(false);
+        expect(reader()).not.toBeNull();
+        expect(host.opened).toEqual([]);
     });
 
     it("does not open anything when ordinary text is clicked", async () => {
