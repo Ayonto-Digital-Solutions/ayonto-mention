@@ -1,0 +1,212 @@
+# Builds the Dataverse solution packages for a release, and publishes them only
+# for a tag.
+#
+# Two ways in, on purpose. Started by hand it builds and checks the packages and
+# leaves them as a workflow artifact, so they can be imported into a development
+# environment and actually tried before anybody calls them a release. Started by
+# a tag it does the same work and then publishes what it built. Nothing reaches
+# a release page that was not built by this file from a tagged commit.
+#
+# The solution project is not in the repository. It holds nothing but the code
+# component, so it is created here with the supported commands each time
+# (pac solution init, pac solution add-reference) rather than kept as a second,
+# drifting copy of what the manifest already says. powerplatform/src stays
+# reserved for a real exported Dataverse solution, which this is not.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, for example 1.0.0"
+        required: true
+        type: string
+  push:
+    tags: ["v*"]
+
+# Read-only by default. Only the publishing job asks for more, and only a tag
+# ever runs it.
+permissions:
+  contents: read
+
+env:
+  SOLUTION_PROJECT: AyontoMentionSolution
+  SOLUTION_NAME: AyontoMention
+
+jobs:
+  package:
+    name: Build and check the solution packages
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: pcf/package-lock.json
+
+      # The pac CLI ships as a .NET tool, and the solution project is built with
+      # dotnet.
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+
+      # Read through the environment and checked against a shape before it is
+      # used anywhere else: it arrives from a tag name or from something typed
+      # into a form, and everything downstream treats it as a version.
+      - name: Work out the version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          version="${INPUT_VERSION:-${GITHUB_REF_NAME#v}}"
+          case "${version}" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::expected a version like 1.0.0, got '${version}'"; exit 1 ;;
+          esac
+          if [ "${version}" != "$(printf '%s' "${version}" | tr -cd '0-9.')" ]; then
+            echo "::error::a version is digits and dots, got '${version}'"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Building ${SOLUTION_NAME} ${version}"
+
+      # What the repository says it is, against what the release says it is. A
+      # release never edits the version it ships: raising it is a pull request.
+      - name: Check the version declarations agree
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: python3 .github/scripts/check-release-version.py "${VERSION}"
+
+      - name: Install the Power Platform CLI
+        run: |
+          dotnet tool install --global Microsoft.PowerApps.CLI.Tool
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Record the toolchain
+        run: |
+          node --version
+          npm --version
+          dotnet --version
+          pac --version
+
+      # A tag push does not run ci.yml, so the gates run here too: a release must
+      # never be cut from a commit that would have failed its pull request.
+      - name: Run the quality gates
+        run: |
+          npm ci --prefix pcf
+          npm run lint
+          npm run typecheck
+          npm test -- --runInBand
+          npm run test:coverage -- --runInBand
+
+      # Building the solution in Release configuration already builds the
+      # component in production mode. It is asked for explicitly as well, so that
+      # a development bundle cannot reach a package through some later change in
+      # how the projects are wired together.
+      - name: Build the component for production
+        run: npm --prefix pcf run build -- --buildMode production
+
+      # The solution project's own name must differ from the component project's,
+      # or pac refuses the reference and msbuild reports an ambiguous project.
+      # The name Dataverse actually reads is the unique name inside Solution.xml,
+      # which the script below sets, along with the version and the packaging.
+      - name: Assemble the solution project
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          rm -rf "${SOLUTION_PROJECT}"
+          mkdir -p "${SOLUTION_PROJECT}"
+          ( cd "${SOLUTION_PROJECT}" \
+              && pac solution init --publisher-name Ayonto --publisher-prefix ayonto \
+              && pac solution add-reference --path "${GITHUB_WORKSPACE}/pcf" )
+          python3 .github/scripts/prepare-release-solution.py "${SOLUTION_PROJECT}" \
+            --version "${VERSION}.0"
+
+      # SolutionPackager reports a component it could not take as a line in its
+      # log and still exits zero. The log is read, and the packages themselves are
+      # read after that.
+      - name: Pack the solution
+        run: |
+          set -o pipefail
+          ( cd "${SOLUTION_PROJECT}" && dotnet build -c Release ) | tee /tmp/pack.log
+          if grep -qE "will be skipped|not defined in customizations" /tmp/pack.log; then
+            echo "::error::SolutionPackager skipped a component — the package is incomplete"
+            grep -E "will be skipped|not defined in customizations" /tmp/pack.log
+            exit 1
+          fi
+
+      - name: Collect the packages
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist
+          built="${SOLUTION_PROJECT}/bin/Release"
+          managed="${built}/${SOLUTION_PROJECT}_managed.zip"
+          unmanaged="${built}/${SOLUTION_PROJECT}.zip"
+          for produced in "${managed}" "${unmanaged}"; do
+            if [ ! -s "${produced}" ]; then
+              echo "::error::${produced} was not produced"
+              find "${SOLUTION_PROJECT}/bin" -type f >&2 || true
+              exit 1
+            fi
+          done
+          cp "${managed}"   "dist/${SOLUTION_NAME}_${VERSION}_managed.zip"
+          cp "${unmanaged}" "dist/${SOLUTION_NAME}_${VERSION}.zip"
+          ls -l dist
+          sha256sum dist/*.zip
+
+      # The packages are opened and read before anyone is told what they contain.
+      - name: Check what was built
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python3 .github/scripts/check-release-package.py \
+            "dist/${SOLUTION_NAME}_${VERSION}_managed.zip" \
+            --version "${VERSION}.0" --control-version "${VERSION}" --managed
+          python3 .github/scripts/check-release-package.py \
+            "dist/${SOLUTION_NAME}_${VERSION}.zip" \
+            --version "${VERSION}.0" --control-version "${VERSION}" --unmanaged
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.SOLUTION_NAME }}-${{ steps.version.outputs.version }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: package
+    # Only a tag publishes. A run started by hand builds the same packages and
+    # leaves them as an artifact to be tried in a real environment first.
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.SOLUTION_NAME }}-${{ needs.package.outputs.version }}
+          path: dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -l dist
+          sha256sum dist/*.zip
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" dist/*.zip --clobber
+          else
+            gh release create "${TAG}" dist/*.zip \
+              --title "${TAG}" \
+              --generate-notes
+          fi

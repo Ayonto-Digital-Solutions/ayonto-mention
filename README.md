@@ -259,6 +259,41 @@ without a lookup: the query is retried without them and the accounts are removed
 from the result instead. Mailbox validation belongs to the designed notification
 pipeline and is not implemented yet.
 
+## Installation
+
+Each release publishes two Dataverse solution packages:
+
+| File | Type | Use it for |
+|---|---|---|
+| `AyontoMention_<version>_managed.zip` | managed | any environment that is not where this control is developed — test, UAT, production |
+| `AyontoMention_<version>.zip` | unmanaged | a development environment, or to look inside the package |
+
+Both contain the same thing: the Ayonto Mention code component, published as
+`Ayonto` with the prefix `ayonto`, in the solution `AyontoMention`. Import the
+package, then add the control to a text column on a model-driven form and
+configure its properties as described above.
+
+**What v1.0.0 contains.** The client only:
+
+- the mention field itself — picker, keyboard, IME-safe editing, atomic
+  mention deletion, character counter
+- saved mention identity, confirmed against Dataverse, and the read view that
+  shows confirmed mentions as people
+- suggestion popup positioned against the viewport
+- `minRows` field-height fallback
+- English and German resources
+- offline, masking, read-only and column-security behaviour
+
+**What it does not contain**, because it does not exist yet: the
+`ayonto_mention` event ledger, the ingest and dispatcher flows, e-mail delivery,
+Teams delivery, and any delivery configuration or state. **Installing this
+release does not send notifications.** The control records who was mentioned;
+turning that into a message is the server-side work still ahead.
+
+Publication of v1.0.0 stays gated on validating the built packages in a real
+model-driven app first — the automated suite cannot prove how a field behaves in
+a browser on a form.
+
 ## Requirements
 
 - Microsoft Dataverse
