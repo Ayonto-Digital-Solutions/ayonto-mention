@@ -290,9 +290,14 @@ Teams delivery, and any delivery configuration or state. **Installing this
 release does not send notifications.** The control records who was mentioned;
 turning that into a message is the server-side work still ahead.
 
-Publication of v1.0.0 stays gated on validating the built packages in a real
-model-driven app first — the automated suite cannot prove how a field behaves in
-a browser on a form.
+**What publishing v1.0.0 does and does not say.** It is released as the client
+component: the packages are built, checked and downloadable. It is not a
+statement that any environment has been validated. The automated suite cannot
+prove how a field behaves in a browser on a form — jsdom performs no layout — so
+before calling a particular deployment validated or production-ready, install the
+package in a real model-driven app and work through the behaviour there: field
+height and resizing, the read and edit views, the suggestion popup against the
+viewport, tokens and navigation, keyboard paths, masking, read-only and offline.
 
 ## Requirements
 
