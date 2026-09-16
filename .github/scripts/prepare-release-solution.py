@@ -28,6 +28,15 @@ from pathlib import Path
 
 SOLUTION_UNIQUE_NAME = "AyontoMention"
 SOLUTION_DISPLAY_NAME = "Ayonto Mention"
+#: The publisher's option value prefix, fixed rather than generated.
+#:
+#: `pac solution init` draws a new one every time it runs, so the same publisher
+#: would arrive at an environment wearing a different number in every release —
+#: and two builds of one commit would differ in their bytes for a reason that has
+#: nothing to do with what is being shipped. It is the range Dataverse derives
+#: option values from for choices created under this publisher, of which this
+#: solution creates none; what it needs to be is the same one every time.
+PUBLISHER_OPTION_VALUE_PREFIX = "45013"
 #: The commented-out block `pac solution init` writes into every new cdsproj.
 COMMENTED_PACKAGE_TYPE = re.compile(
     r"[ \t]*<!--\s*\n"
@@ -64,15 +73,27 @@ def prepare_manifest(path: Path, project_name: str, version: str) -> None:
     text, versions = re.subn(
         r"<Version>[^<]*</Version>", f"<Version>{version}</Version>", text, count=1
     )
+    text, prefixes = re.subn(
+        r"<CustomizationOptionValuePrefix>[^<]*</CustomizationOptionValuePrefix>",
+        "<CustomizationOptionValuePrefix>"
+        f"{PUBLISHER_OPTION_VALUE_PREFIX}"
+        "</CustomizationOptionValuePrefix>",
+        text,
+        count=1,
+    )
 
-    if (names, labels, versions) != (1, 1, 1):
+    if (names, labels, versions, prefixes) != (1, 1, 1, 1):
         raise SystemExit(
             f"::error::{path} is not the project pac generates "
-            f"(unique name {names}, localized name {labels}, version {versions})"
+            f"(unique name {names}, localized name {labels}, version {versions}, "
+            f"option value prefix {prefixes})"
         )
 
     path.write_text(text, encoding="utf-8-sig")
-    print(f"{path}: {SOLUTION_UNIQUE_NAME} {version}")
+    print(
+        f"{path}: {SOLUTION_UNIQUE_NAME} {version}, "
+        f"option value prefix {PUBLISHER_OPTION_VALUE_PREFIX}"
+    )
 
 
 def prepare_project(path: Path) -> None:

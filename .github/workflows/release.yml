@@ -32,6 +32,11 @@ permissions:
 env:
   SOLUTION_PROJECT: AyontoMentionSolution
   SOLUTION_NAME: AyontoMention
+  # The versions the packages were built and proved with. Raising one is a
+  # deliberate change with a new proof, not something a runner does on its own.
+  NODE_VERSION: "24.20.0"
+  DOTNET_VERSION: "10.0.401"
+  PAC_VERSION: "2.12.1"
 
 jobs:
   package:
@@ -43,9 +48,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Pinned, not floated. The candidate a release is validated from and the
+      # package published against its tag are built weeks apart; a toolchain that
+      # moved in between would make them two different things built from one
+      # commit. These are the versions the packages were proved with.
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "24.20.0"
           cache: "npm"
           cache-dependency-path: pcf/package-lock.json
 
@@ -53,11 +62,20 @@ jobs:
       # dotnet.
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: "10.0.401"
 
       # Read through the environment and checked against a shape before it is
       # used anywhere else: it arrives from a tag name or from something typed
       # into a form, and everything downstream treats it as a version.
+      # A run started by hand is a release candidate, and a candidate is cut from
+      # the branch releases come from. Anywhere else it would be a package built
+      # from unreviewed code carrying a real version number.
+      - name: Check where a manual run was started from
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::a release candidate is built from main; this run is on ${GITHUB_REF}"
+          exit 1
+
       - name: Work out the version
         id: version
         env:
@@ -84,15 +102,32 @@ jobs:
 
       - name: Install the Power Platform CLI
         run: |
-          dotnet tool install --global Microsoft.PowerApps.CLI.Tool
+          dotnet tool install --global Microsoft.PowerApps.CLI.Tool --version "${PAC_VERSION}"
           echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
 
-      - name: Record the toolchain
+      # Printed and checked, not assumed: a pinned version that silently resolved
+      # to something else would be worth knowing about before a package is built.
+      - name: Record and check the toolchain
         run: |
           node --version
           npm --version
           dotnet --version
           pac --version
+          installed=$(pac --version | sed -n 's/^Version: \([0-9.]*\).*/\1/p')
+          if [ "${installed}" != "${PAC_VERSION}" ]; then
+            echo "::error::pac is ${installed}, expected ${PAC_VERSION}"
+            exit 1
+          fi
+          node_version=$(node --version)
+          if [ "${node_version}" != "v${NODE_VERSION}" ]; then
+            echo "::error::node is ${node_version}, expected v${NODE_VERSION}"
+            exit 1
+          fi
+          dotnet_version=$(dotnet --version)
+          if [ "${dotnet_version}" != "${DOTNET_VERSION}" ]; then
+            echo "::error::dotnet is ${dotnet_version}, expected ${DOTNET_VERSION}"
+            exit 1
+          fi
 
       # A tag push does not run ci.yml, so the gates run here too: a release must
       # never be cut from a commit that would have failed its pull request.
@@ -181,9 +216,15 @@ jobs:
   publish:
     name: Publish the release
     needs: package
-    # Only a tag publishes. A run started by hand builds the same packages and
-    # leaves them as an artifact to be tried in a real environment first.
-    if: github.ref_type == 'tag'
+    # Every condition matters. `ref_type` alone is not enough: a run started by
+    # hand can be dispatched against a tag as well as a branch, and would then
+    # walk straight into publishing something nobody validated. So the event has
+    # to be a push, the ref has to be a tag, and the tag has to be one of ours.
+    # A manual run builds the same packages and leaves them as an artifact.
+    if: >-
+      github.event_name == 'push'
+      && github.ref_type == 'tag'
+      && startsWith(github.ref_name, 'v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -196,6 +237,55 @@ jobs:
           name: ${{ env.SOLUTION_NAME }}-${{ needs.package.outputs.version }}
           path: dist
 
+      # A release is cut from a signed annotated tag on main, or not at all.
+      #
+      # The two calls are how the REST API tells the two kinds of tag apart: a
+      # lightweight tag is only a reference, so its object is a commit and there
+      # is no tag object to ask about. An annotated tag has one, and that object
+      # is what carries the signature.
+      - name: Check the tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          reference=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}")
+          kind=$(printf '%s' "${reference}" | jq -r '.object.type')
+          if [ "${kind}" != "tag" ]; then
+            echo "::error::${TAG} is a lightweight tag; a release needs a signed annotated tag"
+            exit 1
+          fi
+
+          object=$(printf '%s' "${reference}" | jq -r '.object.sha')
+          tag=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object}")
+          verified=$(printf '%s' "${tag}" | jq -r '.verification.verified')
+          reason=$(printf '%s' "${tag}" | jq -r '.verification.reason')
+          if [ "${verified}" != "true" ]; then
+            echo "::error::${TAG} is not a verified signed tag (${reason})"
+            exit 1
+          fi
+
+          commit=$(printf '%s' "${tag}" | jq -r '.object.sha')
+          if ! gh api "repos/${GITHUB_REPOSITORY}/compare/main...${commit}" \
+                 --jq '.status' | grep -qE '^(identical|behind)$'; then
+            echo "::error::${TAG} points at ${commit}, which is not on main"
+            exit 1
+          fi
+          echo "${TAG}: annotated, signed (${reason}), on main at ${commit}"
+
+      # No --clobber anywhere. A version that has been published is what people
+      # downloaded; replacing its files later would leave two different things
+      # wearing one version number. Repairing a botched publication is a decision
+      # somebody makes deliberately, not something this file does quietly.
+      - name: Refuse to replace a published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "::error::a release for ${TAG} already exists — published versions are not rebuilt"
+            exit 1
+          fi
+
       - name: Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -203,10 +293,27 @@ jobs:
         run: |
           ls -l dist
           sha256sum dist/*.zip
-          if gh release view "${TAG}" >/dev/null 2>&1; then
-            gh release upload "${TAG}" dist/*.zip --clobber
-          else
-            gh release create "${TAG}" dist/*.zip \
-              --title "${TAG}" \
-              --generate-notes
-          fi
+          # What the packages are, said on the release page itself rather than
+          # left to a generated changelog that only lists commits.
+          cat > /tmp/notes.md <<'NOTES'
+          **Ayonto Mention — client release.** This is the Power Apps code
+          component only.
+
+          Installing it does **not** send notifications. There is no
+          `ayonto_mention` event ledger, no ingest or dispatcher flow, no e-mail
+          delivery and no Teams delivery in this package: the control records who
+          was mentioned, and the server-side step that turns that into a message
+          does not exist yet.
+
+          Two Dataverse solution packages are attached:
+
+          * `AyontoMention_<version>_managed.zip` — for environments that are not
+            where this control is developed.
+          * `AyontoMention_<version>.zip` — unmanaged, for a development
+            environment or to inspect the package.
+          NOTES
+          gh release create "${TAG}" dist/*.zip \
+            --verify-tag \
+            --title "${TAG}" \
+            --notes-file /tmp/notes.md \
+            --generate-notes

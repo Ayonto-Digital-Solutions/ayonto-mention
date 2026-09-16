@@ -38,13 +38,32 @@ from xml.etree import ElementTree
 SOLUTION_UNIQUE_NAME = "AyontoMention"
 PUBLISHER_UNIQUE_NAME = "Ayonto"
 PUBLISHER_PREFIX = "ayonto"
+#: Fixed by the release preparation, so one publisher does not arrive at an
+#: environment wearing a different number in every release.
+PUBLISHER_OPTION_VALUE_PREFIX = "45013"
 CONTROL_SCHEMA_NAME = "ayonto_Ayonto.MentionControl"
 CONTROL_NAMESPACE = "Ayonto"
 CONTROL_CONSTRUCTOR = "MentionControl"
 #: Type 66 is a custom control. See the solution component type table.
 CUSTOM_CONTROL_COMPONENT_TYPE = "66"
-#: Both shipped languages have to be in the package, or the field is English-only.
-EXPECTED_RESOURCES = ("MentionControl.1033.resx", "MentionControl.1031.resx")
+#: Every file this release's packages may contain, and no others.
+#:
+#: An allowlist rather than a list of things to refuse, because the interesting
+#: failure is the file nobody thought of. It is deliberately brittle: the day a
+#: version legitimately adds a stylesheet, an image or a third language, this
+#: line fails and somebody looks at what is being shipped before it ships.
+EXPECTED_FILES = frozenset(
+    {
+        "[Content_Types].xml",
+        "solution.xml",
+        "customizations.xml",
+        "Controls/ayonto_Ayonto.MentionControl/ControlManifest.xml",
+        "Controls/ayonto_Ayonto.MentionControl/bundle.js",
+        "Controls/ayonto_Ayonto.MentionControl/bundle.js.LICENSE.txt",
+        "Controls/ayonto_Ayonto.MentionControl/strings/MentionControl.1033.resx",
+        "Controls/ayonto_Ayonto.MentionControl/strings/MentionControl.1031.resx",
+    }
+)
 
 #: Anything a backend would bring with it. None of it belongs in this release.
 FORBIDDEN_PATH_PARTS = (
@@ -125,6 +144,12 @@ def check_solution_manifest(
     prefix = _text(publisher, "CustomizationPrefix")
     if prefix != PUBLISHER_PREFIX:
         raise PackageError(f"prefix is {prefix!r}, expected {PUBLISHER_PREFIX!r}")
+    option_prefix = _text(publisher, "CustomizationOptionValuePrefix")
+    if option_prefix != PUBLISHER_OPTION_VALUE_PREFIX:
+        raise PackageError(
+            f"publisher option value prefix is {option_prefix!r}, expected "
+            f"{PUBLISHER_OPTION_VALUE_PREFIX!r} — it is fixed, not generated"
+        )
 
     components = manifest.findall("RootComponents/RootComponent")
     if len(components) != 1:
@@ -213,6 +238,29 @@ def check_package(path: str, version: str, control_version: str, managed: bool) 
             if package.testzip() is not None:
                 raise PackageError("the archive is damaged")
 
+            # A zip may carry the same path twice, and a reader would see only
+            # one of them. Counted rather than set-compared for that reason.
+            duplicates = {name for name in names if names.count(name) > 1}
+            if duplicates:
+                raise PackageError(f"package lists {sorted(duplicates)[0]!r} twice")
+
+            present = set(names)
+            missing = EXPECTED_FILES - present
+            if missing:
+                raise PackageError(
+                    f"missing from the package: {', '.join(sorted(missing))}"
+                )
+            unexpected = present - EXPECTED_FILES
+            if unexpected:
+                raise PackageError(
+                    f"package contains {', '.join(sorted(unexpected))}, which this "
+                    "release does not ship — if that is intended, the expected file "
+                    "list has to be reviewed and updated"
+                )
+
+            # Kept after the allowlist rather than replaced by it: these name the
+            # specific things a backend would drag in, so a future change to the
+            # list above cannot quietly let one through unremarked.
             lowered = [name.lower() for name in names]
             for forbidden in FORBIDDEN_PATH_PARTS:
                 found = [name for name in lowered if forbidden in name]
@@ -221,24 +269,7 @@ def check_package(path: str, version: str, control_version: str, managed: bool) 
                         f"package contains {found[0]!r}, which this release may not ship"
                     )
 
-            for required in ("solution.xml", "customizations.xml"):
-                if required not in names:
-                    raise PackageError(f"{required} is missing from the package")
-
             control_root = f"Controls/{CONTROL_SCHEMA_NAME}/"
-            control_files = [name for name in names if name.startswith("Controls/")]
-            stray = [
-                name for name in control_files if not name.startswith(control_root)
-            ]
-            if stray:
-                raise PackageError(f"package contains another control: {stray[0]!r}")
-
-            for required in ("ControlManifest.xml", "bundle.js"):
-                if control_root + required not in names:
-                    raise PackageError(f"{required} is missing from the control")
-            for resource in EXPECTED_RESOURCES:
-                if f"{control_root}strings/{resource}" not in names:
-                    raise PackageError(f"{resource} is missing from the control")
 
             check_solution_manifest(package.read("solution.xml"), version, managed)
             check_customizations(package.read("customizations.xml"))
