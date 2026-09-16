@@ -512,6 +512,10 @@ export class AyontoMentionControl implements ComponentFramework.ReactControl<IIn
         const offline = this.isOffline(context);
         const notice = offline ? this.getStrings(context).offlineNotice : undefined;
         const hostLabel = context.mode.label;
+        // The theme the suggestion popup is drawn in. Read on every update
+        // rather than once: an app's theme can change under a running control,
+        // and the popup has to follow it.
+        const design = context.fluentDesignLanguage;
 
         return React.createElement(MentionEditor, {
             // Changing on a record boundary, so React remounts the editor and its
@@ -542,6 +546,17 @@ export class AyontoMentionControl implements ComponentFramework.ReactControl<IIn
             canVerifyPersistedMentions: !offline,
             initialMentions: this.hydrated,
             hostRevision: this.hostRevision,
+            // The platform's own Fluent theme, handed over rather than left to
+            // be inherited. The suggestion list is portalled out of this
+            // control's subtree, and a portal inherits no CSS custom properties
+            // — Fluent themes it by copying the nearest provider's class onto
+            // the portal node, and it can only find that provider through React.
+            // Both are optional on the context, so a host that predates modern
+            // theming, or an app with it switched off, simply says nothing and
+            // the editor falls back.
+            // https://learn.microsoft.com/power-apps/developer/component-framework/fluent-modern-theming
+            theme: design?.tokenTheme,
+            isDarkTheme: design?.isDarkTheme,
             onLocalEdit: this.handleLocalEdit,
             onHostValueAdopted: this.handleHostValueAdopted,
             onOpenUser: this.handleOpenUser,
