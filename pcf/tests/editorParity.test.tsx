@@ -352,8 +352,9 @@ describe("masking a column that is already being edited", () => {
         await flush();
 
         // At rest with a mention in it, the field reads as people rather than as
-        // the characters that spell them.
-        expect(field()).toBeNull();
+        // the characters that spell them. The textarea is still there, covered
+        // and out of reach, because it is the box this field is.
+        expect(field()?.getAttribute("aria-hidden")).toBe("true");
         expect(reader()?.textContent).toContain("Alex Rivera");
         enterEditing();
         expect(requiredField().value).toBe(`${OPENING}@Alex Rivera `);

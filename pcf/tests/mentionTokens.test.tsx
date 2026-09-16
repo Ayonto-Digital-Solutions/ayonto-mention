@@ -210,6 +210,28 @@ function requiredField(): HTMLTextAreaElement {
     return element;
 }
 
+/**
+ * True while the field is the thing being typed in.
+ *
+ * The textarea is no longer torn down to show the people view — it stays
+ * mounted underneath, covered and hidden from assistive technology — so "is
+ * there a textarea" no longer answers "is this field being edited". This does.
+ */
+/** The field underneath the people view, which stays mounted while it is up. */
+function requiredCoveredField(): HTMLTextAreaElement {
+    const element = field();
+    if (element === null) {
+        throw new Error("the field was taken away");
+    }
+    return element;
+}
+
+function isEditing(): boolean {
+    const element = field();
+
+    return element !== null && element.getAttribute("aria-hidden") !== "true";
+}
+
 function reader(): HTMLElement | null {
     return container.querySelector('[role="group"]');
 }
@@ -289,7 +311,7 @@ describe("a saved record with a mention in it", () => {
     it("shows the person as a token, and the rest as text", async () => {
         await start({ value: SAVED_TEXT, metadata: SAVED_METADATA });
 
-        expect(field()).toBeNull();
+        expect(isEditing()).toBe(false);
         expect(tokens()).toHaveLength(1);
         expect(tokenAt(0).textContent).toContain("Alex Rivera");
         // The characters around it are still the characters that were saved.
@@ -380,7 +402,7 @@ describe("a saved record with a mention in it", () => {
 
         expect(tokens()).toHaveLength(1);
         enterEditing();
-        expect(field()).toBeNull();
+        expect(isEditing()).toBe(false);
     });
 });
 
@@ -422,8 +444,10 @@ describe("opening the person a mention names", () => {
         const host = makeHost();
         await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
 
-        // The token is a button: the browser turns Enter and Space into a click,
-        // and the element is reachable by Tab because nothing removes it.
+        // The token is a button, and a browser turns Enter and Space on a focused
+        // button into a click. jsdom does not do that on its own, so the click is
+        // the part represented here; the keys themselves are routed in the tests
+        // below. The element is reachable by Tab because nothing removes it.
         expect(tokenAt(0).tagName).toBe("BUTTON");
         expect(tokenAt(0).getAttribute("tabindex")).not.toBe("-1");
         act(() => {
@@ -431,6 +455,49 @@ describe("opening the person a mention names", () => {
         });
 
         expect(host.opened).toHaveLength(1);
+        // And the field it was pressed in is still being read, not edited.
+        expect(isEditing()).toBe(false);
+    });
+
+    it("leaves Enter on a person to that person", async () => {
+        const host = makeHost();
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+        const token = tokenAt(0);
+        token.focus();
+
+        // The key really does travel up to the surface the tokens sit on — that
+        // surface answers to Enter itself — so the handler there has to be able
+        // to tell a key meant for it from one meant for a person inside it.
+        act(() => {
+            Simulate.keyDown(token, { key: "Enter" });
+        });
+
+        expect(isEditing()).toBe(false);
+        expect(reader()).not.toBeNull();
+        expect(requiredCoveredField().getAttribute("aria-hidden")).toBe("true");
+
+        // What the browser would then do with that key on a button: activate it.
+        act(() => {
+            Simulate.click(token, { detail: 0 });
+        });
+
+        expect(host.opened).toEqual([{ entityName: "systemuser", entityId: USER_A }]);
+        expect(isEditing()).toBe(false);
+    });
+
+    it("leaves Space on a person to that person", async () => {
+        const host = makeHost();
+        await start({ value: SAVED_TEXT, metadata: SAVED_METADATA, host });
+        const token = tokenAt(0);
+        token.focus();
+
+        act(() => {
+            Simulate.keyDown(token, { key: " " });
+        });
+
+        expect(isEditing()).toBe(false);
+        expect(reader()).not.toBeNull();
+        expect(host.opened).toEqual([]);
     });
 
     it("does not open anything when ordinary text is clicked", async () => {
@@ -450,7 +517,7 @@ describe("opening the person a mention names", () => {
             Simulate.click(tokenAt(0));
         });
 
-        expect(field()).toBeNull();
+        expect(isEditing()).toBe(false);
         expect(tokens()).toHaveLength(1);
     });
 
@@ -523,7 +590,7 @@ describe("moving between reading and editing", () => {
             Simulate.blur(requiredField());
         });
 
-        expect(field()).toBeNull();
+        expect(isEditing()).toBe(false);
         expect(tokenAt(0).textContent).toContain("Alex Rivera");
         expect(control.getOutputs().field).toBe(SAVED_TEXT);
         expect(control.getOutputs().mentionMetadata).toBe(metadata);
@@ -908,7 +975,7 @@ describe("starting to edit a field that is at rest", () => {
             Simulate.keyDown(surface, { key: "Tab" });
         });
 
-        expect(field()).toBeNull();
+        expect(isEditing()).toBe(false);
     });
 
     it("does not open on a key press when the field is read-only", async () => {
@@ -923,7 +990,7 @@ describe("starting to edit a field that is at rest", () => {
             Simulate.keyDown(surface, { key: "Enter" });
         });
 
-        expect(field()).toBeNull();
+        expect(isEditing()).toBe(false);
     });
 
     it("leaves the field alone when a person is pressed instead", async () => {
@@ -933,7 +1000,7 @@ describe("starting to edit a field that is at rest", () => {
             Simulate.click(tokenAt(0));
         });
 
-        expect(field()).toBeNull();
+        expect(isEditing()).toBe(false);
         expect(document.activeElement).not.toBe(field());
     });
 });
