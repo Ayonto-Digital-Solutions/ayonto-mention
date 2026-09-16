@@ -15,6 +15,13 @@
 name: Release
 
 on:
+  # A pull request builds and checks the packages too. Packaging is where a
+  # release goes wrong quietly — a component that fails to pack on Ubuntu, a
+  # package that grew a file — and finding that out on the tag is finding it out
+  # too late. Publishing stays impossible here: see the condition on the publish
+  # job.
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       version:
@@ -35,6 +42,9 @@ env:
   # The versions the packages were built and proved with. Raising one is a
   # deliberate change with a new proof, not something a runner does on its own.
   NODE_VERSION: "24.20.0"
+  # The npm that ships inside that Node distribution. Named so a changed Node
+  # build cannot bring a different npm along unnoticed; nothing installs it.
+  NPM_VERSION: "11.19.0"
   DOTNET_VERSION: "10.0.401"
   PAC_VERSION: "2.12.1"
 
@@ -76,12 +86,27 @@ jobs:
           echo "::error::a release candidate is built from main; this run is on ${GITHUB_REF}"
           exit 1
 
+      # One branch per event, spelled out. A fallback chain would quietly pick
+      # something for an event nobody thought about, and the version is the name
+      # the package goes out under.
       - name: Work out the version
         id: version
         env:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
-          version="${INPUT_VERSION:-${GITHUB_REF_NAME#v}}"
+          case "${GITHUB_EVENT_NAME}" in
+            workflow_dispatch)
+              version="${INPUT_VERSION}" ;;
+            push)
+              version="${GITHUB_REF_NAME#v}" ;;
+            pull_request)
+              # What the repository itself says it is: a pull request builds the
+              # packages to prove they build, not to name a release.
+              version=$(node -p "require('./package.json').version") ;;
+            *)
+              echo "::error::${GITHUB_EVENT_NAME} does not say what version to build"
+              exit 1 ;;
+          esac
           case "${version}" in
             [0-9]*.[0-9]*.[0-9]*) ;;
             *) echo "::error::expected a version like 1.0.0, got '${version}'"; exit 1 ;;
@@ -99,6 +124,39 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: python3 .github/scripts/check-release-version.py "${VERSION}"
+
+      # What this run was built from, said plainly and in one place.
+      #
+      # `git rev-parse HEAD` rather than a context value, because what
+      # `github.sha` means depends on the event — for a pull request it is a
+      # merge commit that exists nowhere else. The commit printed here is the one
+      # whose packages get validated, and the one a release tag must later point
+      # at.
+      - name: Record what this build came from
+        id: provenance
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          commit=$(git rev-parse HEAD)
+          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### ${SOLUTION_NAME} ${VERSION}"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Source commit | \`${commit}\` |"
+            echo "| Version | ${VERSION} |"
+            echo "| Event | ${GITHUB_EVENT_NAME} |"
+            echo "| Run | ${GITHUB_RUN_ID} |"
+            echo
+            if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+              echo "This is a **release candidate**. Whatever is validated in a"
+              echo "real environment is validated for this commit: the final"
+              echo "signed tag has to point at \`${commit}\`, even if main has"
+              echo "moved on since."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "source commit ${commit}, version ${VERSION}, event ${GITHUB_EVENT_NAME}"
 
       - name: Install the Power Platform CLI
         run: |
@@ -121,6 +179,11 @@ jobs:
           node_version=$(node --version)
           if [ "${node_version}" != "v${NODE_VERSION}" ]; then
             echo "::error::node is ${node_version}, expected v${NODE_VERSION}"
+            exit 1
+          fi
+          npm_version=$(npm --version)
+          if [ "${npm_version}" != "${NPM_VERSION}" ]; then
+            echo "::error::npm is ${npm_version}, expected ${NPM_VERSION}"
             exit 1
           fi
           dotnet_version=$(dotnet --version)
@@ -290,26 +353,27 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.package.outputs.version }}
         run: |
           ls -l dist
           sha256sum dist/*.zip
           # What the packages are, said on the release page itself rather than
           # left to a generated changelog that only lists commits.
-          cat > /tmp/notes.md <<'NOTES'
+          cat > /tmp/notes.md <<NOTES
           **Ayonto Mention — client release.** This is the Power Apps code
           component only.
 
           Installing it does **not** send notifications. There is no
-          `ayonto_mention` event ledger, no ingest or dispatcher flow, no e-mail
+          \`ayonto_mention\` event ledger, no ingest or dispatcher flow, no e-mail
           delivery and no Teams delivery in this package: the control records who
           was mentioned, and the server-side step that turns that into a message
           does not exist yet.
 
           Two Dataverse solution packages are attached:
 
-          * `AyontoMention_<version>_managed.zip` — for environments that are not
-            where this control is developed.
-          * `AyontoMention_<version>.zip` — unmanaged, for a development
+          * \`${SOLUTION_NAME}_${VERSION}_managed.zip\` — for environments that are
+            not where this control is developed.
+          * \`${SOLUTION_NAME}_${VERSION}.zip\` — unmanaged, for a development
             environment or to inspect the package.
           NOTES
           gh release create "${TAG}" dist/*.zip \
