@@ -116,8 +116,7 @@ so this control does not do it. `minRows` is the supported answer: the maker say
 it, and the textarea carries it. The textarea is also the field's only box — the
 read view is drawn over it, with matching type and padding, rather than being a
 second box of its own — so the field a user resized is never taken away and built
-again. Vertical resizing stays enabled. Whether it all looks right on a form is a
-browser's answer and is checked in the DEV environment, not in the test suite. It is optional with a default, so
+again. Vertical resizing stays enabled. It is optional with a default, so
 forms configured before it existed keep working — a newer version of an imported
 code component
 [may add optional properties but not required ones](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/faq#cannot-add-remove-properties-from-code-component-once-it-is-imported).

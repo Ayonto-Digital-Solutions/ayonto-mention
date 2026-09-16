@@ -270,17 +270,18 @@ const useStyles = makeStyles({
      * `medium` size, taken from its source rather than guessed: `body1` type,
      * which is `fontSizeBase300` over `lineHeightBase300`; the same vertical
      * padding; the same horizontal padding, which Fluent writes as the nudge plus
-     * the extra it leaves for the resize handle. A row therefore costs the same
-     * on both, which is what makes one configured minimum mean one thing.
+     * the extra it leaves for the resize handle. A line of text therefore sits
+     * where it sat a moment ago, and nothing shifts under the pointer when
+     * somebody clicks into the field.
      *
-     * `border-box` for the same reason: the minimum height is written as rows of
-     * text *plus* the padding, and Fluent's textarea counts its padding inside
-     * its height. Left as `content-box`, this surface would add its padding on
-     * top of the identical number and quietly be the taller of the two.
+     * `border-box` because this surface is given a box rather than asked for one:
+     * its four sides are pinned to the textarea's, and counting the padding
+     * inside that box — as the textarea does with its own — is what keeps the
+     * arithmetic predictable. It is the model Fluent uses, and this follows it.
      *
      * What this does not claim is that the two render to the same pixel: Fluent's
      * root adds a border and a focus indicator, and only a browser can say what
-     * that comes to. Equal inputs are what is settled here.
+     * that comes to.
      */
     reader: {
         backgroundColor: tokens.colorNeutralBackground1,

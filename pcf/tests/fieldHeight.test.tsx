@@ -308,9 +308,9 @@ describe("reading and writing are one box", () => {
         expect(reading?.getPropertyValue("padding-inline")).toBe(
             "calc(var(--spacingHorizontalMNudge) + var(--spacingHorizontalXXS))"
         );
-        // The minimum is written as rows *plus* padding, and Fluent's textarea
-        // counts its padding inside its height. Content-box here would quietly
-        // add this surface's padding on top of the same number.
+        // The overlay is pinned to the textarea's box rather than asked to work
+        // one out, and it counts its padding inside that box the way Fluent's
+        // textarea counts its own — the same box model, deliberately.
         expect(reading?.boxSizing).toBe("border-box");
     });
 
