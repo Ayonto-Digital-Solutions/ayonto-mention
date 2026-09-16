@@ -127,11 +127,18 @@ jobs:
 
       # What this run was built from, said plainly and in one place.
       #
-      # `git rev-parse HEAD` rather than a context value, because what
-      # `github.sha` means depends on the event — for a pull request it is a
-      # merge commit that exists nowhere else. The commit printed here is the one
-      # whose packages get validated, and the one a release tag must later point
-      # at.
+      # `git rev-parse HEAD` rather than a context value, because it reports what
+      # was actually checked out. What that commit *means* depends on the event,
+      # and the difference matters:
+      #
+      # * pull_request — GitHub checks out a synthetic merge of the branch with
+      #   current main. The commit exists nowhere else, and it is not a release
+      #   candidate and never a tag target. What it proves is worth having: that
+      #   the proposed branch, combined with main as it stands, packages.
+      # * workflow_dispatch from main — the real release candidate. Whatever is
+      #   validated in an environment is validated for this exact commit, and the
+      #   final signed tag has to point at it.
+      # * push of a tag — the tagged source, rebuilt for publication.
       - name: Record what this build came from
         id: provenance
         env:
@@ -208,8 +215,24 @@ jobs:
           npm --prefix pcf run refreshTypes
           npm run lint
           npm run typecheck
-          npm test -- --runInBand
-          npm run test:coverage -- --runInBand
+          # Through the pcf project rather than the root wrapper. `npm test --
+          # --runInBand` at the root hands the flag to the *second* npm, which
+          # treats it as configuration it does not know, warns, and drops it —
+          # the tests then ran in parallel while the log said otherwise.
+          npm --prefix pcf run test -- --runInBand
+          npm --prefix pcf run test:coverage -- --runInBand
+
+      # What actually ships is React, Fluent and this control. A release stops if
+      # an advisory reaches that, at high or worse.
+      #
+      # Deliberately `--omit=dev`: the build and test tooling has its own
+      # advisories — today nine, four of them high, all inside `pcf-start` and
+      # `pcf-scripts`, Microsoft's own harness — and none of it is in the package
+      # or in a browser. Failing the release on those would be failing on
+      # something no user of this control can be reached through.
+      - name: Check the shipped dependencies for advisories
+        working-directory: pcf
+        run: npm audit --omit=dev --audit-level=high
 
       # Building the solution in Release configuration already builds the
       # component in production mode. It is asked for explicitly as well, so that
