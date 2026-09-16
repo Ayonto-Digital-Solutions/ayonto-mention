@@ -200,6 +200,12 @@ jobs:
       - name: Run the quality gates
         run: |
           npm ci --prefix pcf
+          # The manifest types are generated, not committed, and linting and
+          # type-checking need them: without them every IInputs is an unresolved
+          # type and the run drowns in unsafe-any errors. The pull request build
+          # gets them from its own `npm run build`; here they are asked for
+          # directly, before anything reads the sources.
+          npm --prefix pcf run refreshTypes
           npm run lint
           npm run typecheck
           npm test -- --runInBand
