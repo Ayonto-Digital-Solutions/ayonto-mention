@@ -290,9 +290,19 @@ Import the package, then add the control to a text column on a model-driven form
 and configure its properties as described above.
 
 **The table is reused, not redesigned.** It is the table the productive legacy
-solution exports, carried over unchanged — same logical name, same ownership,
-same sixteen columns, same view. This release repackages it under the
-`AyontoMention` solution; it does not alter it.
+solution exports, carried over unchanged — same logical name, **UserOwned**, same
+sixteen columns, same view. This release repackages it under the `AyontoMention`
+solution; it does not alter it.
+
+**Its ownership is chosen, not inherited by accident.** A Dataverse table's
+ownership is fixed when the table is created and
+[cannot be changed afterwards](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/types-of-entities),
+so importing this package into an environment that does not yet have the table
+settles the question there for good. Taking over the existing component means
+taking over its ownership, and that is the trade this release makes deliberately
+rather than recreating a table an installed application already depends on.
+Ownership scopes row-level access; it grants no privilege, and ordinary users
+receive none on this table.
 
 **It installs beside an older Ayonto mention control rather than over it.** The
 earlier product occupies `Ayonto.MentionControl`; this one has a name of its own

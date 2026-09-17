@@ -303,10 +303,44 @@ at the Web API and never involve the control at all.
 So the privilege is not granted.
 
 **Ordinary application users get no `Create`, `Update` or `Delete` on the central
-ledger.** They save host records; they do not author events. The ledger is planned
-as **OrganizationOwned** unless validation in a real environment gives a concrete
-reason to change it — Legacy needed user ownership because the client itself
-created rows, and this design removes that reason.
+ledger.** They save host records; they do not author events. That is a
+privilege statement, and it is the one that matters.
+
+### The ledger is user-owned, and that is now a decision
+
+An earlier draft of this document said the ledger was *planned as
+OrganizationOwned unless validation gave a reason to change it*. That sentence
+has been withdrawn, because it described a choice that is not available.
+
+From v1.1.0 the solution packages the existing `ayonto_mention` table, and that
+table is **UserOwned**. Not provisionally: Microsoft is explicit that *"Once a
+table is created, the ownership type can't be changed"*, and again — *"After you
+create a custom table, you can't change the ownership… If you later determine
+that your custom table must be of a different type, you need to delete it and
+create a new one"*
+([Types of tables](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/types-of-entities)).
+
+So the ownership is not packaging metadata a later release can flip. It is part
+of the table, and taking over the existing table means taking over its ownership.
+
+**That is the intended trade, deliberately made.** This product is succeeding the
+legacy component rather than replacing its schema: the same logical table, the
+same columns, already depended on by an installed application. Recreating it as
+organization-owned would mean a different table, a migration of whatever it
+already holds, and a broken dependency for anything that points at the old one —
+in exchange for a property that the privilege model above already provides.
+
+**User-owned is not the legacy trust model returning.** The two are unrelated
+questions. Ownership decides how row-level access is *scoped* once a privilege
+exists; it does not grant the privilege. Ordinary users still get no `Create`,
+`Update` or `Delete` here, still cannot author an event, and record ownership on
+its own confers nothing — Dataverse authorization remains a matter of security
+role privileges, and this design grants none of the ones that would matter.
+
+If some future requirement genuinely needed organization ownership, it would need
+a different table and an explicit data-migration design. **That is not the plan,
+and nothing here should be read as leaving the door open to it as a small later
+change.**
 
 **The ingest plug-in is the trusted writer**, and Dataverse has a documented way
 to say so. `IOrganizationServiceFactory.CreateOrganizationService(userId)`:

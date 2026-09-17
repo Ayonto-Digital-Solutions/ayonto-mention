@@ -33,6 +33,30 @@ files the legacy solution exports. Only `Solution.xml` differs, and only in thre
 places: the unique name, the display name and the version. No table metadata was
 touched.
 
+## The table is UserOwned, and that is a decision rather than an omission
+
+`ayonto_mention` is **UserOwned**. It is the real legacy component, preserved
+deliberately, and its ownership is **not temporary packaging metadata**.
+
+Microsoft is explicit that this cannot be revisited later: *"Once a table is
+created, the ownership type can't be changed"*, and *"After you create a custom
+table, you can't change the ownership… If you later determine that your custom
+table must be of a different type, you need to delete it and create a new one"*
+([Types of tables](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/types-of-entities)).
+
+**The consequence is worth stating plainly.** Importing v1.1.0 into an
+environment that does not yet have this table *creates a UserOwned table there*.
+From that moment the ownership is fixed for that environment. It is therefore an
+architectural decision this release makes on behalf of every environment that
+imports it — not something a later release can casually flip, and not something
+to be discovered after the fact.
+
+Ownership is a separate question from authorization. It scopes row-level access
+once a privilege exists; it does not grant one. The security boundary described
+in [`../docs/server-architecture.md`](../docs/server-architecture.md) is
+unchanged: ordinary application users receive no `Create`, `Update` or `Delete`
+on this table, and the future server-side ingest is the only trusted writer.
+
 ## Three things the packer will not tell you
 
 Each of these packs cleanly, imports cleanly, and leaves something out. They are
@@ -59,7 +83,7 @@ A hand-written `RibbonDiff.xml` is a fourth: the packer answers it with a
 | Publisher prefix             | `ayonto`        |
 | Publisher choice value prefix | `14144`         |
 | Code component                | `Ayonto.AyontoMentionControl` |
-| Table                         | `ayonto_mention`, user-owned, from v1.1.0 |
+| Table                         | `ayonto_mention`, **UserOwned**, from v1.1.0 |
 
 **The choice value prefix is taken from the publisher that already exists.**
 Dataverse derives the values of choices created under a publisher from it, and
@@ -162,9 +186,27 @@ need answers from a real environment:
 | D | How the two managed solutions layer over the shared table |
 | E | What uninstalling either one does to the table and to the data in it |
 | F | Whether a solution that declares a dependency on the legacy table still has it satisfied afterwards |
+| G | Whether the future trusted server writer can create an event row with the intended owner semantics **while ordinary application users remain unable to create, update or delete ledger rows directly** |
 
-Until those are answered, treat B through F as open. The safe sequence is a
-clean environment first.
+G is the one that keeps ownership and authorization apart in practice rather than
+only on paper. The eventual owner value for a server-written row is **not decided
+here** — it belongs to the server implementation and to that proof.
+
+Until those are answered, treat B through G as open. The safe sequence is a clean
+environment first.
+
+### How to read the overlap with the legacy solution
+
+Not "guaranteed safe", and not "unsupported" either. Dataverse layers managed
+solutions at component level, and for a table the behaviour is *top wins*;
+Microsoft's own advice is to *"construct a solution that follows best practices
+so that your solution won't interfere with other solutions"* and points at
+segmented solutions
+([Solution layers](https://learn.microsoft.com/en-us/power-platform/alm/solution-layers-alm)).
+
+What that leaves is a **migration and coexistence proof**, to be run in a real
+environment, which decides the migration sequence. The package is not being
+changed to avoid taking that test.
 
 ## What this solution does not carry
 
