@@ -59,7 +59,7 @@ Everything below is about the **client**. The server side does not exist yet.
 | Clicking a confirmed token opens that `systemuser` through `context.navigation.openForm` | ✅ implemented |
 | Automated tests and CI | ✅ implemented |
 | Suggestion popup portalled and positioned against the field, through Fluent's positioning: opens below, flips above where there is no room, stays inside the viewport, follows the field when a form pane scrolls | ✅ implemented in code — the flipping, shifting, scrolling and resizing are a browser's arithmetic and are checked in a real environment, not in the test suite |
-| `ayonto_mention` event table, ingest flows, dispatcher, delivery | ⏳ planned, see [Roadmap](#roadmap) |
+| Central event ledger, host-side ingest step, dispatcher, delivery | ⏳ planned, see [Roadmap](#roadmap) and [docs/server-architecture.md](docs/server-architecture.md) |
 
 **Selecting a mention does not send anything today.** The control writes the text
 and the mention metadata as bound outputs. It writes nothing to Dataverse itself:
@@ -75,10 +75,10 @@ flowchart TD
     pcf --> meta["bound output: mentionMetadata"]
     field --> save["Source record save"]
     meta --> save
-    save -.-> ingest["planned: source-table ingest flow"]
-    ingest -.-> ledger["planned: ayonto_mention event table"]
+    save -.-> ingest["planned: async PostOperation step<br/>on the host source table"]
+    ingest -.-> ledger["planned: central event ledger"]
     ledger -.-> dispatcher["planned: notification dispatcher"]
-    dispatcher -.-> delivery["planned: delivery provider"]
+    dispatcher -.-> delivery["planned: e-mail · Teams · in-app"]
 ```
 
 Solid arrows are implemented today. Everything marked *planned* is designed but
@@ -87,6 +87,12 @@ does not exist in this repository yet.
 The control exposes the text and the companion metadata as bound outputs. The
 server-side notification pipeline is designed to process those values only after
 the source record has been committed.
+
+**The server side is designed, not built.** Which solution owns which part of it,
+why the ingest is an asynchronous plug-in step registered by the host solution
+rather than a flow, and what a server may and may not believe about the companion
+column, are written down in
+[`docs/server-architecture.md`](docs/server-architecture.md).
 
 ## Component configuration
 
@@ -154,7 +160,7 @@ The companion column carries `schemaVersion` 1:
 | Field | Meaning |
 |---|---|
 | `schemaVersion` | The payload version. Anything else is not read. |
-| `sourceField` | Logical name of the text column these mentions were written in. Server-side processing is designed to validate it against configured mappings rather than trust it. |
+| `sourceField` | Logical name of the text column these mentions were written in. Server-side processing is designed to validate it against the mapping the host solution declared on its own plug-in step, rather than trust it. |
 | `eventId` | Client-generated identity for one mention episode, carried so a later server-side step can be idempotent about it. It identifies; it authorizes nothing. |
 | `recipientUserId` | The Dataverse `systemuser` id. Display names are deliberately never identity. |
 | `occurrences` | Where that person stands in the text, as UI state — see below. |
@@ -236,8 +242,9 @@ context again.
   itself before anything is delivered. The designed notification identity is
   `eventId` + `recordTable` + `recordId` + `sourceField` + `recipientUserId`;
   occurrence positions are not part of it.
-- Delivery, when it exists, is intended as best-effort. No exactly-once or
-  guaranteed-delivery claim is made.
+- Delivery, when it exists, is intended as best-effort, and its state is kept per
+  channel: one column cannot mean both "the mail arrived" and "the chat message
+  did not". No exactly-once or guaranteed-delivery claim is made.
 
 This repository is public and must stay customer-neutral — no tenant or
 environment identifiers, no real addresses, no customer schema. See
@@ -290,9 +297,9 @@ present in one environment, and a form can carry either.
 - English and German resources
 - offline, masking, read-only and column-security behaviour
 
-**What it does not contain**, because it does not exist yet: the
-`ayonto_mention` event ledger, the ingest and dispatcher flows, e-mail delivery,
-Teams delivery, and any delivery configuration or state. **Installing this
+**What it does not contain**, because it does not exist yet: the central event
+ledger, the host-side ingest step, the dispatcher, e-mail, Teams and in-app
+delivery, and any delivery configuration or state. **Installing this
 release does not send notifications.** The control records who was mentioned;
 turning that into a message is the server-side work still ahead.
 
@@ -351,6 +358,8 @@ Running them from inside `pcf/` works too — there, use plain `npm ci`.
 │   └── tests/              # Jest suites
 ├── powerplatform/
 │   └── src/                # reserved Dataverse solution source
+├── docs/
+│   └── server-architecture.md   # the designed server side and who owns it
 ├── CONTRIBUTING.md
 ├── SECURITY.md
 └── README.md
@@ -385,9 +394,11 @@ tooling and then committed. See [powerplatform/README.md](powerplatform/README.m
    popup's flip, shift, scroll and resize behaviour gets verified against a real
    browser
 3. Generate the solution and schema with supported Microsoft tooling
-4. `ayonto_mention` event ledger with its alternate key
-5. Table-specific ingest flow
-6. Generic notification dispatcher
+4. Central event ledger with its alternate key
+5. Host-side ingest — asynchronous PostOperation plug-in steps that the host
+   solution registers on its own source tables, against the plug-in type this
+   solution supplies. See [`docs/server-architecture.md`](docs/server-architecture.md)
+6. Generic notification dispatcher for e-mail, Teams and in-app delivery
 7. Delivery channels and their configuration
 8. Integration, concurrency and solution-import testing
 9. Package and publish v1.0.0

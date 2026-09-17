@@ -32,7 +32,9 @@ with a different prefix, **stop and reconcile deliberately** — do not quietly
 change either side, because the value is part of how existing choices keep their
 meaning.
 
-This client-only package creates no choices at all.
+The client-only package released today creates no choices at all. The first
+package that carries the event ledger will, and from that point the prefix above
+is what its values are derived from.
 
 **The component name is also a coexistence decision.** The productive legacy
 mention control occupies `Ayonto.MentionControl` under this same publisher, and
@@ -42,6 +44,42 @@ and a code component may gain optional properties in a later version but not
 required ones. So this product is `Ayonto.AyontoMentionControl` — same vendor
 namespace, its own name, no version number baked into it — and both controls can
 be installed in one environment and put on one form.
+
+## What this solution owns, and what a host solution owns
+
+Ayonto Mention ships as a **reusable base solution**. An application that wants
+mentions installs it and then depends on it. That split is not packaging
+convenience — it follows from how solutions are built, and it decides what may
+ever appear in this tree.
+
+| `AyontoMention` (this solution) | The host application's own solution |
+|---|---|
+| the code component | its business tables and text columns |
+| the central event ledger and its keys | **one companion metadata column per mention-enabled text column** |
+| the plug-in package, assembly and types | the form bindings to the code component |
+| the security components the ledger needs — ordinary users get no `Create`/`Update`/`Delete` on it | the concrete SDK message processing steps on its source tables |
+| later: dispatcher and per-channel delivery state | the mapping from each text column to its companion column |
+
+**This solution cannot predeclare host-specific companion columns.** A column is
+a component that lives inside a table — *"Except for choice columns, all other
+columns can't exist outside of a table"*
+([Solution concepts](https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm)).
+Carrying columns for tables a solution names while it is built is ordinary, and
+it is what the host solution does for its own. What a reusable base solution
+cannot do is name a host table that has not been chosen yet: this one is built
+before it knows which application will use it. The host knows its own tables
+exactly, so the columns belong there, in the solution that already owns the table
+they sit on.
+
+The plug-in *types* belong here; the *steps* that register them against a host's
+table belong to the host. A step is the registration — there is no half of one —
+and Microsoft describes this arrangement directly: a solution may contain a step
+while *"another solution containing the assembly is already installed"*
+([Register a plug-in](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/register-plug-in)).
+
+The reasoning in full, including why the ingest is an asynchronous plug-in step
+rather than a flow per table, is in
+[`../docs/server-architecture.md`](../docs/server-architecture.md).
 
 ## Reserved layout
 
