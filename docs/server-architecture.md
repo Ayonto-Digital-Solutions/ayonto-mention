@@ -195,8 +195,18 @@ behave as if it were.
 The reason this is affordable is the host-specific registration. An asynchronous
 step queues a system job whenever it matches, before any of our code could
 decide otherwise — so a *global* asynchronous step would queue a job for every
-update in the environment. Filtered to one table and a few columns, it queues one
-only when a mention actually changed.
+update in the environment.
+
+Filtered to one host table and its companion columns, a job is queued only when
+the `Update` request contains at least one of those companion attributes. That is
+the whole of what the registration decides — presence, not change. Where an
+unchanged `mentionMetadata` was included in the request anyway, the job has
+already been queued before any of this product's code exists to object, and it is
+the handler's pre/post metadata comparison that keeps it from doing ledger work.
+
+The same-display-name case is on the other side of that comparison and stays
+there: a changed `recipientUserId` or `eventId` behind byte-identical visible text
+is a real metadata change, and it is processed.
 
 **Post images rather than a retrieve.** A post image *"captures a 'snapshot' of
 the table with the fields you're interested in"*, and Microsoft names retrieving
@@ -330,9 +340,33 @@ claim is made anywhere in this product.
 | The client writing ledger rows directly | Puts the commit boundary in a browser. A record abandoned without saving would still have notified somebody |
 | A separate command row committed independently of the save | Same defect in a different shape, plus a second write path into the source text. The source-record save is the commit boundary, and there is only one |
 | One global step with no primary entity | Runs on every table in the environment and cannot use filtering attributes |
-| A central table mapping every text column to its companion column | Unnecessary once the host registers its own steps: the registration *is* the mapping, and only a solution can create one |
+| A central table mapping every text column to its companion column | Unnecessary once the host registers its own steps — see the note below |
 | A Power Automate ingest flow per source table | Not chosen — see the note below. Power Automate is supported server-side technology; it is simply not the mechanism this architecture uses |
 | Synchronous ingest inside the save transaction | Lets a notification defect refuse somebody's business record |
+
+**On the mapping table specifically.** No central Ayonto table is needed to say
+which text column a companion column belongs to. The host-owned step carries that
+mapping in its unsecure configuration, and the step is registered against the
+host's own table — so the registration is the mapping, and it is authoritative
+because of who is able to make one, not because of what created it.
+
+That distinction matters, and an earlier draft of this document got it wrong.
+A step is an ordinary `SdkMessageProcessingStep` row: the Plug-in Registration
+tool creates and edits such registrations directly, and unregistering is
+described as *"delete operations on the `PluginAssembly`, `PluginType`,
+`SdkMessageProcessingStep`, and `SdkMessageProcessingStepImage` tables"*
+([Register a plug-in](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/register-plug-in)).
+Solutions are how a step is *distributed*, not the only way one can exist — the
+same article is explicit that registrations *"aren't added to the unmanaged
+solution that includes the plug-in assemblies. You must add each registered step
+to the solution separately."*
+
+So the guarantee is not "only a solution can create one". It is that creating or
+changing a registration takes privileged Dataverse customization access, which
+ordinary users writing a business record do not have — while a row in a mapping
+table would be as writable as whoever held privileges on that table. The host
+solution then packages and ships the concrete step, which is what makes the
+mapping travel with the application that declared it.
 
 **On the flow option specifically.** Nothing here should be read as a claim that
 Power Automate is unsupported, or an untrustworthy place to run server-side logic.
