@@ -57,17 +57,19 @@ ever appear in this tree.
 | the code component | its business tables and text columns |
 | the central event ledger and its keys | **one companion metadata column per mention-enabled text column** |
 | the plug-in package, assembly and types | the form bindings to the code component |
-| the security components the ledger needs | the concrete SDK message processing steps on its source tables |
+| the security components the ledger needs — ordinary users get no `Create`/`Update`/`Delete` on it | the concrete SDK message processing steps on its source tables |
 | later: dispatcher and per-channel delivery state | the mapping from each text column to its companion column |
 
-**This solution cannot carry companion columns.** A column is a component that
-lives inside a table, and a solution can only carry one for a table it names
-while it is being built — *"Except for choice columns, all other columns can't
-exist outside of a table"*
+**This solution cannot predeclare host-specific companion columns.** A column is
+a component that lives inside a table — *"Except for choice columns, all other
+columns can't exist outside of a table"*
 ([Solution concepts](https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm)).
-This solution is built before it knows which application will use it. The host
-knows its own tables exactly, so the columns belong there, in the solution that
-already owns the table they sit on.
+Carrying columns for tables a solution names while it is built is ordinary, and
+it is what the host solution does for its own. What a reusable base solution
+cannot do is name a host table that has not been chosen yet: this one is built
+before it knows which application will use it. The host knows its own tables
+exactly, so the columns belong there, in the solution that already owns the table
+they sit on.
 
 The plug-in *types* belong here; the *steps* that register them against a host's
 table belong to the host. A step is the registration — there is no half of one —

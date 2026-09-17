@@ -67,11 +67,14 @@ A column is a solution component that lives inside a table, and Microsoft states
 the constraint plainly: *"Each of those components requires a table to exist.
 Except for choice columns, all other columns can't exist outside of a table"*
 ([Solution concepts](https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm)).
-A solution can only carry a column for a table it names while it is being built.
-`AyontoMention` is built long before it knows which application will use it, so
-it cannot carry companion columns for tables it has never heard of. No
-mechanism changes that, and looking for one is looking for a way around solution
-composition rather than with it.
+A solution carries columns for the tables it names while it is being built — that
+is ordinary, and it is exactly what the host solution does for its own tables.
+
+What the reusable base solution cannot do is **predeclare host-specific companion
+columns on arbitrary host tables it does not know**. `AyontoMention` is built long
+before it knows which application will use it, and a component cannot name a table
+that has not been chosen yet. No mechanism changes that, and looking for one is
+looking for a way around solution composition rather than with it.
 
 The host application, on the other hand, knows its own tables exactly. Adding a
 companion column there is ordinary schema work in the solution that already owns
@@ -114,8 +117,13 @@ case for a record created without mentioning anybody.
 | Stage | PostOperation |
 | Execution mode | **Asynchronous** |
 | Filtering Attributes | **only the companion metadata columns** |
+| **Pre Image** | **the companion metadata columns, for the before/after comparison** |
 | Post Image | the source text columns and their companion metadata columns |
 | Unsecure Configuration | the mapping from each text column to its companion column |
+
+The handler compares the metadata in the pre image against the metadata in the
+post image and returns without touching the ledger when nothing meaningful moved.
+That comparison is not an optimization that can be skipped — see below.
 
 ### Why each of those
 
@@ -136,14 +144,41 @@ spares the environment all of it.
 plug-in executes every time an update message occurs for that event"*, and warns
 that this combines badly with auto-save
 ([Include filtering attributes](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/best-practices/business-logic/include-filtering-attributes-plugin-registration)).
-Filtering on the metadata columns means ordinary typing, which changes only the
-text, never wakes the step at all.
+Filtering to the companion columns is the right registration-level optimization:
+an update that carries none of them does not reach this step at all.
 
-It also happens to be exactly right for the case the product exists for. When
-one person is swapped for another behind identical visible text — two colleagues
-share a display name, the writer picks the other one — the text does not change
-by a single byte, but `recipientUserId` and `eventId` in the companion column do.
-The step is filtered on precisely the column that moved.
+**What a filtering attribute does not tell you.** It fires on *presence in the
+request*, not on change. Microsoft states it twice, and plainly — *"If a request
+contains a filtering attribute, the plug-in will be triggered regardless of
+whether the attribute's value is changed or not"*
+([Register a plug-in](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/register-plug-in)),
+and *"Whether the values are actually changed isn't relevant"* (Include filtering
+attributes). Both articles add the corresponding expectation of the caller:
+*"Only changed values should be included in the payload of update requests."*
+
+Whether this control's host meets that expectation is **not known yet**. The
+control's `getOutputs` returns both bound outputs — the text and the companion
+metadata — on every cycle, because they describe one moment of the editor and are
+set together. What a model-driven form then puts into the Dataverse `Update`
+request is the host's decision, and nobody here has watched it make that decision
+on a text-only edit.
+
+So the rule the implementation must hold to is:
+
+> **"The step was invoked" does not mean "the metadata changed."**
+
+The handler establishes that for itself, by comparing the pre-image metadata with
+the post-image metadata, and returns when they match. Note what this does and
+does not save: if an unchanged companion column *was* included in the request, the
+asynchronous system job has already been queued by the time any of our code runs,
+and the comparison only lets the handler exit cheaply and safely. It does not
+avoid the invocation.
+
+None of that weakens the case the product exists for. When one person is swapped
+for another behind identical visible text — two colleagues share a display name,
+the writer picks the other one — the text does not change by a single byte, but
+`recipientUserId` and `eventId` in the companion column do. That is a real
+metadata change, the comparison sees it, and it must be processed.
 
 **Asynchronous, not synchronous.** A synchronous PostOperation step runs *"within
 the database transaction"*, and *"An exception thrown by your code at any
@@ -235,6 +270,47 @@ The immutable identity of a notification stays
 `eventId` + `recordTable` + `recordId` + `sourceField` + `recipientUserId`.
 Occurrence positions are not part of it and never become part of it.
 
+## Who may write the ledger
+
+The control never writes a ledger row. That is a property of the client, and a
+client-side property secures nothing on its own: if ordinary users held Create
+privilege on the ledger, someone could post a forged notification event straight
+at the Web API and never involve the control at all.
+
+So the privilege is not granted.
+
+**Ordinary application users get no `Create`, `Update` or `Delete` on the central
+ledger.** They save host records; they do not author events. The ledger is planned
+as **OrganizationOwned** unless validation in a real environment gives a concrete
+reason to change it — Legacy needed user ownership because the client itself
+created rows, and this design removes that reason.
+
+**The ingest plug-in is the trusted writer**, and Dataverse has a documented way
+to say so. `IOrganizationServiceFactory.CreateOrganizationService(userId)`:
+*"When called in a plug-in, a `null` value indicates the SYSTEM user and a
+`Guid.Empty` value indicates the same user as `IPluginExecutionContext.UserId`.
+Any other value indicates a specific system user"*
+([CreateOrganizationService](https://learn.microsoft.com/en-us/dotnet/api/microsoft.xrm.sdk.iorganizationservicefactory.createorganizationservice?view=dataverse-sdk-latest)).
+Passing `null` is how the authoritative ledger write happens without the calling
+user needing a privilege they should not have.
+
+**SYSTEM is a privilege, not a reason to believe anything.** It says who may
+write the row. It says nothing about whether the row deserves to exist. Every
+check in the next section still runs first: schema version, the `sourceField`
+mapping the host declared on its own step, the `eventId` rules, `recipientUserId`
+resolved against `systemuser`, and the structural sense of the payload. Elevated
+context applied to unvalidated input is worse than no elevation at all, because it
+launders a claim into a fact.
+
+Use it narrowly: for the Ayonto-owned operations that require it, and for nothing
+else.
+
+**The actor is still the user.** `InitiatingUserId` from the execution context is
+the trusted identity of whoever caused the source-record operation, and that is
+what the event records as its actor. Writing the row as SYSTEM does not make the
+event anonymous — it separates *who did it*, which comes from the platform, from
+*who may persist it*, which is a permission question.
+
 ## Delivery
 
 Out of scope for the ingest work, and listed here so its scope is not quietly
@@ -255,8 +331,20 @@ claim is made anywhere in this product.
 | A separate command row committed independently of the save | Same defect in a different shape, plus a second write path into the source text. The source-record save is the commit boundary, and there is only one |
 | One global step with no primary entity | Runs on every table in the environment and cannot use filtering attributes |
 | A central table mapping every text column to its companion column | Unnecessary once the host registers its own steps: the registration *is* the mapping, and only a solution can create one |
-| A Power Automate ingest flow per source table | Needs a connection per host and per table, and puts validation in a place that cannot be trusted with it |
+| A Power Automate ingest flow per source table | Not chosen — see the note below. Power Automate is supported server-side technology; it is simply not the mechanism this architecture uses |
 | Synchronous ingest inside the save transaction | Lets a notification defect refuse somebody's business record |
+
+**On the flow option specifically.** Nothing here should be read as a claim that
+Power Automate is unsupported, or an untrustworthy place to run server-side logic.
+It is neither. The host-owned plug-in step is chosen because it fits *this*
+product better:
+
+- one shared, versioned server implementation rather than one per host
+- the table registration is owned and declared by the host solution
+- filtering attributes and entity images are available to it
+- the ingest needs no Dataverse connector connection reference, so importing the
+  base solution asks for no connection
+- it composes cleanly as a reusable base solution plus a dependent host solution
 
 ## What must be proven in a real environment
 
@@ -268,11 +356,18 @@ not features, and none of them can be claimed from documentation alone:
 - exporting those steps with the host solution and importing them as managed
 - the declared dependency between host and base solution behaving on import,
   upgrade and uninstall
-- post images arriving with the expected columns on both `Create` and `Update`
-- filtering attributes actually suppressing the step for text-only edits
+- post images arriving with the expected columns on both `Create` and `Update`,
+  and the `Update` pre image carrying the metadata needed for the comparison
+- **whether a text-only edit through this control puts the unchanged companion
+  metadata column into the Dataverse `Update` request at all** — the control emits
+  both bound outputs on every cycle, and what the host forwards is unverified
+- what filtering attributes then actually do with that payload
 - an asynchronous failure leaving the source-record save untouched
 - the same-display-name replacement waking the `Update` step
 - unsecure configuration surviving export and import
+- an ordinary user saving a host record **without** holding `Create` on the ledger
+- the ingest plug-in writing the authoritative ledger row under the SYSTEM context
+- an ordinary user being unable to create, update or delete ledger rows directly
 - the ledger staying unreadable to ordinary callers, over both the Web API and TDS
 
 Until an Ayonto Dataverse development environment exists, none of this is built,
