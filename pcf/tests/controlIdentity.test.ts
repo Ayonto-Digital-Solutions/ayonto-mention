@@ -55,7 +55,7 @@ describe("the identity this component ships under", () => {
     });
 
     it("carries the version this release is cut for", () => {
-        expect(attribute("version")).toBe("1.0.2");
+        expect(attribute("version")).toBe("1.1.0");
     });
 
     it("still asks for what the legacy contract has no place for", () => {

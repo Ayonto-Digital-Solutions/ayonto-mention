@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Dataverse solution project for Ayonto Mention.
+
+  Until v1.0.2 this project did not exist: the release workflow ran
+  `pac solution init` on every run and packed whatever that produced. That is
+  why every release up to and including v1.0.2 contained the code component and
+  nothing else — a solution synthesised at build time can only carry what the
+  workflow remembers to hand it, and it was handed one project reference.
+
+  From v1.1.0 the solution is source in this repository, so what ships is what
+  can be read here: the table under src/, and the code component through the
+  project reference below.
+
+  The project is named AyontoMentionSolution rather than AyontoMention because a
+  solution project may not share its name with a component project it references
+  — pac refuses the reference and msbuild calls the result ambiguous. The name
+  Dataverse actually reads is the UniqueName inside src/Other/Solution.xml, and
+  that one is AyontoMention.
+-->
+<Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PowerAppsTargetsPath>$(MSBuildExtensionsPath)\Microsoft\VisualStudio\v$(VisualStudioVersion)\PowerApps</PowerAppsTargetsPath>
+  </PropertyGroup>
+
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" />
+  <Import Project="$(PowerAppsTargetsPath)\Microsoft.PowerApps.VisualStudio.Solution.props" Condition="Exists('$(PowerAppsTargetsPath)\Microsoft.PowerApps.VisualStudio.Solution.props')" />
+
+  <PropertyGroup>
+    <ProjectGuid>7b1f2c84-6a3d-4e51-9c08-2d4f6b8a1e30</ProjectGuid>
+    <TargetFrameworkVersion>v4.6.2</TargetFrameworkVersion>
+    <!--Remove TargetFramework when this is available in 16.1-->
+    <TargetFramework>net462</TargetFramework>
+    <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
+    <SolutionRootPath>src</SolutionRootPath>
+  </PropertyGroup>
+
+  <!--
+    Both packages out of one build. The alternative is two builds of the same
+    source in different configurations, and then the managed and the unmanaged
+    package are two builds rather than two views of one.
+  -->
+  <PropertyGroup>
+    <SolutionPackageType>Both</SolutionPackageType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.PowerApps.MSBuild.Solution" Version="1.*" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.0" PrivateAssets="All" />
+  </ItemGroup>
+
+  <!--
+    The code component, referenced rather than copied. The solution targets
+    understand a pcfproj reference and take its build output into the package;
+    the manifest in ../pcf stays the single place the component is described.
+
+    Checked in rather than added by the workflow with `pac solution add-reference`:
+    a reference the repository does not carry is a reference a release can forget,
+    and that is exactly how the database went missing from v1.0.x.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\pcf\AyontoMention.pcfproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ExcludeDirectories Include="$(MSBuildThisFileDirectory)\.gitignore" />
+    <ExcludeDirectories Include="$(MSBuildThisFileDirectory)\bin\**" />
+    <ExcludeDirectories Include="$(MSBuildThisFileDirectory)\obj\**" />
+    <ExcludeDirectories Include="$(MSBuildThisFileDirectory)\*.cdsproj" />
+    <ExcludeDirectories Include="$(MSBuildThisFileDirectory)\*.cdsproj.user" />
+    <ExcludeDirectories Include="$(MSBuildThisFileDirectory)\*.sln" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)\**" Exclude="@(ExcludeDirectories)" />
+    <Content Include="$(SolutionPackageZipFilePath)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <Import Project="$(MSBuildToolsPath)\Microsoft.Common.targets" />
+  <Import Project="$(PowerAppsTargetsPath)\Microsoft.PowerApps.VisualStudio.Solution.targets" Condition="Exists('$(PowerAppsTargetsPath)\Microsoft.PowerApps.VisualStudio.Solution.targets')" />
+
+</Project>

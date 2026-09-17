@@ -8,10 +8,18 @@ missing something. So the artifact itself is opened and read, and every claim
 made about it on the release page is checked here first.
 
 What this release is allowed to contain is deliberately narrow: the Ayonto
-Mention code component, and nothing else. No tables, no flows, no connection
-references, no environment variables — those belong to a backend that does not
-exist yet, and a package that quietly grew one would be a far worse surprise
-than a failed build.
+Mention code component and the central `ayonto_mention` table, and nothing else.
+No flows, no plug-in assemblies, no connection references, no environment
+variables — those belong to a server side that does not exist yet, and a package
+that quietly grew one would be a far worse surprise than a failed build.
+
+From v1.1.0 the table is **required**, not merely permitted. Up to v1.0.2 this
+file refused an Entities section outright, because the package was the client
+only and a table appearing in it would have meant something had gone wrong. A
+release that is supposed to install a table and does not is the same class of
+silent failure in the other direction, so the check is inverted rather than
+dropped: the table's name, ownership, columns and view are stated below and held
+against what was actually packed.
 
 Fails closed: anything expected and missing, anything present and unexpected,
 and anything it cannot read at all is an error.
@@ -52,8 +60,48 @@ CONTROL_CONSTRUCTOR = "AyontoMentionControl"
 #: control that forms are already using.
 LEGACY_CONTROL_SCHEMA_NAME = "ayonto_Ayonto.MentionControl"
 LEGACY_CONTROL_CONSTRUCTOR = "MentionControl"
-#: Type 66 is a custom control. See the solution component type table.
+#: The second legacy control, which shares the publisher and must never be here.
+LEGACY_GROUP_CONTROL_SCHEMA_NAME = "ayonto_Ayonto.GroupDetailListControl"
+#: Type 66 is a custom control, type 1 an entity. See the solution component type table.
 CUSTOM_CONTROL_COMPONENT_TYPE = "66"
+ENTITY_COMPONENT_TYPE = "1"
+
+#: The table, as the legacy solution exported it and as this package reuses it.
+#:
+#: Stated here rather than read out of the source tree: a checker that takes its
+#: expectations from the thing it is checking agrees with every drift, including
+#: the drift somebody did not mean to make.
+TABLE_LOGICAL_NAME = "ayonto_mention"
+TABLE_SCHEMA_NAME = "ayonto_Mention"
+TABLE_ENTITY_SET_NAME = "ayonto_mentions"
+#: UserOwned, exactly as exported. Ownership decides how row-level security
+#: behaves, so a package that changed it would be a different table wearing the
+#: same name.
+TABLE_OWNERSHIP = "UserOwned"
+TABLE_COLUMNS = frozenset(
+    {
+        "ayonto_Channel",
+        "ayonto_DeliveryDetail",
+        "ayonto_DeliveryStatus",
+        "ayonto_LinkText",
+        "ayonto_MentionId",
+        "ayonto_MentionedById",
+        "ayonto_Message",
+        "ayonto_Name",
+        "ayonto_RecordId",
+        "ayonto_RecordName",
+        "ayonto_RecordTable",
+        "ayonto_RecordUrl",
+        "ayonto_Subject",
+        "ayonto_UserEmail",
+        "ayonto_UserId",
+        "ayonto_UserName",
+    }
+)
+TABLE_VIEWS = frozenset({"Active Mentions"})
+#: The ownership relationships Dataverse gives a user-owned table. Six, no more:
+#: a seventh would mean this package had grown a link to something else.
+EXPECTED_RELATIONSHIPS = 6
 #: Every file this release's packages may contain, and no others.
 #:
 #: An allowlist rather than a list of things to refuse, because the interesting
@@ -73,9 +121,13 @@ EXPECTED_FILES = frozenset(
     }
 )
 
-#: Anything a backend would bring with it. None of it belongs in this release.
+#: Anything a server side or another product would bring with it. None of it
+#: belongs in this release.
+#:
+#: The table is not in this list and never was a file: SolutionPackager inlines
+#: entities into customizations.xml when it packs, so the database arrives as
+#: content rather than as a path. It is checked where it actually lives.
 FORBIDDEN_PATH_PARTS = (
-    "entities/",
     "workflows/",
     "webresources/",
     "pluginassemblies/",
@@ -83,18 +135,18 @@ FORBIDDEN_PATH_PARTS = (
     "appmodules/",
     "connectionreferences",
     "environmentvariable",
-    "savedqueries/",
-    "ayonto_mention/",
     "groupdetaillist",
 )
 #: Elements in customizations.xml that must be present but empty.
+#:
+#: `Entities` and `EntityRelationships` left this list in v1.1.0: the first now
+#: carries the table, the second the six ownership relationships that come with
+#: it. Both are checked by content further down instead.
 MUST_BE_EMPTY = (
-    "Entities",
     "Workflows",
     "Roles",
     "Templates",
     "EntityMaps",
-    "EntityRelationships",
     "SolutionPluginAssemblies",
     "EntityDataProviders",
 )
@@ -159,32 +211,105 @@ def check_solution_manifest(
             f"{PUBLISHER_OPTION_VALUE_PREFIX!r} — it is fixed, not generated"
         )
 
+    # Two root components from v1.1.0: the table and the code component. Named
+    # rather than counted loosely, because "two of something" is not the check —
+    # which two is.
     components = manifest.findall("RootComponents/RootComponent")
-    if len(components) != 1:
+    declared = {
+        (component.get("type"), component.get("schemaName")) for component in components
+    }
+    for schema_name in (LEGACY_CONTROL_SCHEMA_NAME, LEGACY_GROUP_CONTROL_SCHEMA_NAME):
+        if (CUSTOM_CONTROL_COMPONENT_TYPE, schema_name) in declared:
+            raise PackageError(
+                f"the package declares {schema_name!r}, a productive legacy component — "
+                "importing this would land on top of something forms already use"
+            )
+
+    expected = {
+        (ENTITY_COMPONENT_TYPE, TABLE_LOGICAL_NAME),
+        (CUSTOM_CONTROL_COMPONENT_TYPE, CONTROL_SCHEMA_NAME),
+    }
+    if declared != expected:
+        missing = sorted(expected - declared)
+        unexpected = sorted(declared - expected)
         raise PackageError(
-            f"expected exactly one root component, found {len(components)}"
+            f"root components are wrong — missing {missing}, unexpected {unexpected}"
         )
-    component = components[0]
-    if component.get("type") != CUSTOM_CONTROL_COMPONENT_TYPE:
+
+
+def check_table(root: ElementTree.Element) -> None:
+    """The table this release exists to install, against the table it should be.
+
+    Required, not merely tolerated. A package that imports cleanly and leaves the
+    environment without the table is the failure this whole file is here to
+    catch, and from v1.1.0 that failure has a direction it did not have before.
+    """
+    entities = root.findall("Entities/Entity")
+    if len(entities) != 1:
         raise PackageError(
-            f"root component type is {component.get('type')!r}, "
-            f"expected {CUSTOM_CONTROL_COMPONENT_TYPE!r} (custom control)"
+            f"expected exactly one table, found {len(entities)} — this release "
+            f"installs {TABLE_LOGICAL_NAME!r} and nothing else"
         )
-    schema_name = component.get("schemaName")
-    if schema_name == LEGACY_CONTROL_SCHEMA_NAME:
+
+    entity = entities[0]
+    name = entity.findtext("Name")
+    if name != TABLE_SCHEMA_NAME:
+        raise PackageError(f"the packaged table is {name!r}, expected {TABLE_SCHEMA_NAME!r}")
+
+    described = entity.find("./EntityInfo/entity")
+    if described is None:
+        raise PackageError("the packaged table has no EntityInfo/entity")
+
+    entity_set = described.findtext("EntitySetName")
+    if entity_set != TABLE_ENTITY_SET_NAME:
         raise PackageError(
-            f"the root component is {LEGACY_CONTROL_SCHEMA_NAME!r}, the productive "
-            "legacy control — importing this would replace it"
+            f"EntitySetName is {entity_set!r}, expected {TABLE_ENTITY_SET_NAME!r}"
         )
-    if schema_name != CONTROL_SCHEMA_NAME:
+
+    ownership = described.findtext("OwnershipTypeMask")
+    if ownership != TABLE_OWNERSHIP:
         raise PackageError(
-            f"root component is {schema_name!r}, expected {CONTROL_SCHEMA_NAME!r}"
+            f"the table is {ownership!r}, expected {TABLE_OWNERSHIP!r} — ownership "
+            "decides how row-level security behaves and is not a packaging detail"
+        )
+
+    columns = {
+        attribute.get("PhysicalName", "")
+        for attribute in entity.iter("attribute")
+        if attribute.findtext("IsCustomField") == "1"
+        or attribute.findtext("Type") == "primarykey"
+    }
+    if columns != TABLE_COLUMNS:
+        missing = sorted(TABLE_COLUMNS - columns)
+        unexpected = sorted(columns - TABLE_COLUMNS)
+        raise PackageError(
+            f"the table's columns are wrong — missing {missing}, unexpected {unexpected}"
+        )
+
+    views = set()
+    for query in entity.iter("savedquery"):
+        localized = query.find("./LocalizedNames/LocalizedName")
+        if localized is not None:
+            views.add(localized.get("description", ""))
+    if views != TABLE_VIEWS:
+        raise PackageError(
+            f"the table carries the views {sorted(views)}, expected {sorted(TABLE_VIEWS)} — "
+            "a view configured outside Entity.xml is packed silently into nothing"
+        )
+
+    relationships = root.findall("EntityRelationships/EntityRelationship")
+    if len(relationships) != EXPECTED_RELATIONSHIPS:
+        raise PackageError(
+            f"the package carries {len(relationships)} relationship(s), expected "
+            f"{EXPECTED_RELATIONSHIPS} — the ownership relationships of a user-owned table"
         )
 
 
 def check_customizations(customizations_xml: bytes) -> None:
-    """One code component, and none of the things a backend would add."""
+    """One code component, one table, and none of the things a server side would add."""
     root = ElementTree.fromstring(customizations_xml)
+
+    check_table(root)
 
     for name in MUST_BE_EMPTY:
         element = root.find(name)
@@ -193,18 +318,18 @@ def check_customizations(customizations_xml: bytes) -> None:
         if len(element) != 0:
             raise PackageError(
                 f"customizations.xml carries {len(element)} {name} — this release is "
-                "the code component only"
+                "the code component and the table, and nothing else"
             )
 
     controls = root.findall("CustomControls/CustomControl")
     if len(controls) != 1:
         raise PackageError(f"expected exactly one control, found {len(controls)}")
     name_element = controls[0].find("Name")
-    if name_element is not None and name_element.text == LEGACY_CONTROL_SCHEMA_NAME:
-        raise PackageError(
-            f"customizations.xml names {LEGACY_CONTROL_SCHEMA_NAME!r}, the productive "
-            "legacy control"
-        )
+    for legacy in (LEGACY_CONTROL_SCHEMA_NAME, LEGACY_GROUP_CONTROL_SCHEMA_NAME):
+        if name_element is not None and name_element.text == legacy:
+            raise PackageError(
+                f"customizations.xml names {legacy!r}, a productive legacy component"
+            )
     if name_element is None or name_element.text != CONTROL_SCHEMA_NAME:
         raise PackageError(
             f"control is {name_element.text if name_element is not None else None!r}, "

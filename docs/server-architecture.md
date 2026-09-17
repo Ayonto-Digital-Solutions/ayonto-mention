@@ -2,10 +2,15 @@
 
 How a mention becomes a notification, and which solution owns which part of that.
 
-Nothing described here exists in this repository yet. It is written down so that
-the implementation, when it happens, is the implementation of a decision rather
-than a rediscovery of one — and so that the routes already considered and
-rejected stay rejected.
+**One part of this now exists, and it is worth being exact about which.** From
+v1.1.0 the solution package installs the central `ayonto_mention` table: the
+schema is shipped. Nothing writes to it. The ingest step, the dispatcher and
+every delivery channel described below are still designed and unbuilt, so a
+mention still becomes a bound output on a business record and stops there.
+
+The rest is written down so that the implementation, when it happens, is the
+implementation of a decision rather than a rediscovery of one — and so that the
+routes already considered and rejected stay rejected.
 
 The client half is documented in the [README](../README.md). It ends where this
 document begins: the control writes a text column and a companion metadata
@@ -21,12 +26,18 @@ flowchart TD
     text --> save["Source-record save"]
     meta --> save
     save -.-> step["planned: async PostOperation step<br/>on the host source table"]
-    step -.-> ledger["planned: central event ledger"]
+    step -.-> ledger["packaged from v1.1.0:<br/>central ayonto_mention table"]
     ledger -.-> dispatcher["planned: dispatcher"]
     dispatcher -.-> channels["planned: e-mail · Teams · in-app"]
 ```
 
-Solid arrows exist today. Everything dotted is designed and unbuilt.
+Solid arrows exist today. Everything dotted is designed and unbuilt — with one
+exception: the ledger box is a table that v1.1.0 actually installs. The arrows
+into and out of it are not.
+
+**Packaged is not implemented.** The table being present in an environment says
+nothing about anything writing to or reading from it, and this document should
+not be read as if it did.
 
 ## Two solutions, and why
 
@@ -38,8 +49,10 @@ not an inconvenience to design around — it is the seam the packaging follows.
 
 Owns everything that is the same for every host:
 
-- the code component `Ayonto.AyontoMentionControl`
-- the central event ledger table, its columns, choices and keys
+- the code component `Ayonto.AyontoMentionControl` — **shipped**
+- the central `ayonto_mention` table, its columns and its view — **shipped from
+  v1.1.0**, reused unchanged from the legacy product's export rather than
+  designed here
 - the plug-in package, assembly and plug-in types
 - the security components the ledger needs
 - later: the dispatcher and per-channel delivery state

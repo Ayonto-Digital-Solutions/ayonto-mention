@@ -1,6 +1,54 @@
 # Power Platform solution source
 
-This tree holds the **YAML source-control format** for the Dataverse solution.
+This tree holds the Dataverse solution project and its source in the **classic
+SolutionPackager XML format** — `src/Entities/<Table>/Entity.xml` and
+`src/Other/`.
+
+**Why the classic format and not YAML.** The reserved layout here used to be the
+YAML source-control format (`solutions/`, `entities/`, `modernflows/`,
+`publishers/`). Nothing had been produced into it. What this solution actually
+needs is the `ayonto_mention` table, and that table already exists as a real
+export — in the legacy product's repository, in the classic XML format. Reusing
+that export unchanged is worth more than a format preference, and mixing the two
+layouts is not an option: on a case-insensitive filesystem `entities/` and
+`Entities/` are one directory, on Linux they are two, and a tree that means
+different things on a developer's machine and in CI is a trap rather than a
+reservation.
+
+## What is here
+
+```
+powerplatform/
+├── AyontoMentionSolution.cdsproj   # the solution project; builds both packages
+└── src/
+    ├── Entities/ayonto_Mention/Entity.xml   # the table, verbatim from the legacy export
+    └── Other/
+        ├── Solution.xml            # AyontoMention identity, publisher, root components
+        ├── Customizations.xml      # <Entities /> stays childless — see below
+        └── Relationships.xml       # the six ownership relationships
+```
+
+`Entity.xml`, `Relationships.xml` and `Customizations.xml` are byte-for-byte the
+files the legacy solution exports. Only `Solution.xml` differs, and only in three
+places: the unique name, the display name and the version. No table metadata was
+touched.
+
+## Three things the packer will not tell you
+
+Each of these packs cleanly, imports cleanly, and leaves something out. They are
+guarded by `.github/scripts/check-solution-source.py`, which runs before every
+release build.
+
+1. **An entity folder that no `RootComponent` mentions** packs without the table.
+   There is no warning anywhere.
+2. **A non-empty `<Entities />` in `Customizations.xml`** makes SolutionPackager
+   drop the Entities folder entirely. The element has to be present and childless.
+3. **A `SavedQueries/` folder** is read by nothing. Views belong inside
+   `<SavedQueries>` in `Entity.xml`, and a table whose views live in a folder
+   ships with no view at all.
+
+A hand-written `RibbonDiff.xml` is a fourth: the packer answers it with a
+`NullReferenceException` that names only the entity it was processing.
 
 ## Conventions
 
@@ -11,6 +59,7 @@ This tree holds the **YAML source-control format** for the Dataverse solution.
 | Publisher prefix             | `ayonto`        |
 | Publisher choice value prefix | `14144`         |
 | Code component                | `Ayonto.AyontoMentionControl` |
+| Table                         | `ayonto_mention`, user-owned, from v1.1.0 |
 
 **The choice value prefix is taken from the publisher that already exists.**
 Dataverse derives the values of choices created under a publisher from it, and
@@ -81,26 +130,47 @@ The reasoning in full, including why the ingest is an asynchronous plug-in step
 rather than a flow per table, is in
 [`../docs/server-architecture.md`](../docs/server-architecture.md).
 
-## Reserved layout
-
-```
-powerplatform/src/
-├── solutions/AyontoMention/
-├── publishers/
-├── entities/
-├── modernflows/
-└── environmentvariabledefinitions/
-```
-
 ## Rules
 
-- **Do not hand-author files in this tree.** Every artefact must be produced by
-  supported PAC CLI / Dataverse tooling against the Microsoft schema, then
-  committed. Hand-written YAML drifts from the schema and breaks import.
+- **Do not hand-author table metadata in this tree.** `Entity.xml` and
+  `Relationships.xml` come from a real Dataverse export and are copied, not
+  written. Hand-written metadata drifts from the schema and breaks import.
+  Solution-level packaging metadata — unique name, display name, version, root
+  components — is a different thing and may be edited deliberately.
 - The control is contributed by the PCF project in [`../pcf`](../pcf) and is
   referenced from the solution project rather than copied here.
 - Keep this tree customer-neutral: no tenant or environment IDs, no connection
   IDs, no real user or customer data. See [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 
-The directories currently contain only `.gitkeep` placeholders to reserve the
-structure.
+## Unvalidated: what happens where the legacy solution is already installed
+
+The table this package installs carries the same logical name as the one the
+legacy `AyontoPcfControls` solution installs, under the same publisher. In an
+environment that already has that solution, two managed solutions would then
+relate to one table.
+
+**Whether that is safe has not been tested, and this file does not claim it is.**
+Managed solution layering has rules for this, and rules are not the same as
+evidence. Before this package is imported anywhere that matters, the following
+need answers from a real environment:
+
+| | To validate |
+|---|---|
+| A | Import into a clean environment with no legacy solution present |
+| B | Import into an environment where `AyontoPcfControls` and its `ayonto_mention` already exist |
+| C | Whether import order changes the outcome |
+| D | How the two managed solutions layer over the shared table |
+| E | What uninstalling either one does to the table and to the data in it |
+| F | Whether a solution that declares a dependency on the legacy table still has it satisfied afterwards |
+
+Until those are answered, treat B through F as open. The safe sequence is a
+clean environment first.
+
+## What this solution does not carry
+
+No flows, no plug-in assemblies, no SDK message processing steps, no connection
+references, no environment variables, no security roles. The import asks for no
+connection, because nothing in it needs one. The server side described in
+[`../docs/server-architecture.md`](../docs/server-architecture.md) is designed
+and unbuilt; this package installs the table it will eventually write to, and
+nothing writes to it yet.

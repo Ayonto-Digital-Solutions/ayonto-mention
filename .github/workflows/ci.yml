@@ -45,3 +45,11 @@ jobs:
 
       - name: Test
         run: npm test
+
+      # The solution source, on every pull request rather than only on a release.
+      # The mistakes this catches are the ones SolutionPackager stays silent
+      # about — a table no RootComponent mentions, a non-empty <Entities /> that
+      # makes the packer drop the folder — and finding them on the tag is finding
+      # them too late. No dependencies, so it costs a second.
+      - name: Check the solution source
+        run: python3 .github/scripts/check-solution-source.py

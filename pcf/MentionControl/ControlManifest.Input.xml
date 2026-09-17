@@ -11,7 +11,7 @@
        where it is used. So this keeps the Ayonto namespace and takes a name of
        its own, and the two can sit on the same form.
        https://learn.microsoft.com/power-apps/developer/component-framework/faq -->
-  <control namespace="Ayonto" constructor="AyontoMentionControl" version="1.0.2" display-name-key="MentionControl_Display_Key" description-key="MentionControl_Desc_Key" control-type="virtual" >
+  <control namespace="Ayonto" constructor="AyontoMentionControl" version="1.1.0" display-name-key="MentionControl_Display_Key" description-key="MentionControl_Desc_Key" control-type="virtual" >
     <!-- This control calls no third-party service. Mentions are looked up through
          the Dataverse Web API of the environment the control already runs in. -->
     <external-service-usage enabled="false">
