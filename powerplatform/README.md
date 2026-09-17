@@ -52,10 +52,26 @@ imports it — not something a later release can casually flip, and not somethin
 to be discovered after the fact.
 
 Ownership is a separate question from authorization. It scopes row-level access
-once a privilege exists; it does not grant one. The security boundary described
-in [`../docs/server-architecture.md`](../docs/server-architecture.md) is
-unchanged: ordinary application users receive no `Create`, `Update` or `Delete`
-on this table, and the future server-side ingest is the only trusted writer.
+once a privilege exists; it does not grant one.
+
+**The security boundary in
+[`../docs/server-architecture.md`](../docs/server-architecture.md) is a target,
+and this release does not reach it.** That target is: ordinary application users
+must not require direct `Create`, `Update` or `Delete` on this table, because the
+trusted server ingest authors the events.
+
+What v1.1.0 does about it is **nothing, deliberately**:
+
+- it carries **no security role**;
+- it does not rewrite the privileges an environment already has;
+- so the effective privileges on this table are environment-specific and have to
+  be observed rather than assumed.
+
+There is a reason not to touch them yet. The older mention control writes
+`ayonto_mention` rows from the browser, so an environment still running it may
+grant exactly the direct access the target design removes. Removing it here would
+break that control before anything replaces it. The privilege change belongs to
+the server cutover.
 
 ## Three things the packer will not tell you
 
@@ -130,7 +146,7 @@ ever appear in this tree.
 | the code component | its business tables and text columns |
 | the central event ledger and its keys | **one companion metadata column per mention-enabled text column** |
 | the plug-in package, assembly and types | the form bindings to the code component |
-| the security components the ledger needs — ordinary users get no `Create`/`Update`/`Delete` on it | the concrete SDK message processing steps on its source tables |
+| later: the security components the ledger needs — **none ship in v1.1.0** | the concrete SDK message processing steps on its source tables |
 | later: dispatcher and per-channel delivery state | the mapping from each text column to its companion column |
 
 **This solution cannot predeclare host-specific companion columns.** A column is
@@ -186,13 +202,20 @@ need answers from a real environment:
 | D | How the two managed solutions layer over the shared table |
 | E | What uninstalling either one does to the table and to the data in it |
 | F | Whether a solution that declares a dependency on the legacy table still has it satisfied afterwards |
-| G | Whether the future trusted server writer can create an event row with the intended owner semantics **while ordinary application users remain unable to create, update or delete ledger rows directly** |
+| **G1** | **Coexistence** — what privileges users on this table *actually* have while the legacy solution is still present, and that importing v1.1.0 does not break the legacy deployment merely by arriving |
+| **G2** | **Post-cutover** — once the trusted ingest exists: ordinary users can save host records *without* direct ledger `Create`/`Update`/`Delete`, the trusted writer creates validated events, and direct user mutation of the ledger is denied |
 
-G is the one that keeps ownership and authorization apart in practice rather than
-only on paper. The eventual owner value for a server-written row is **not decided
-here** — it belongs to the server implementation and to that proof.
+G is split because the two halves happen at different times and must not be run
+together. **G1 observes and changes nothing.** It goes first, because what a
+migrating environment currently permits is not knowable from here — and the
+legacy control's own writes may depend on it. **G2 is the cutover**, and it is
+the point at which privileges actually change.
 
-Until those are answered, treat B through G as open. The safe sequence is a clean
+Neither security change is implemented now. The eventual owner value for a
+server-written row is **not decided here** either; it belongs to the server
+implementation and to G2.
+
+Until those are answered, treat B through G2 as open. The safe sequence is a clean
 environment first.
 
 ### How to read the overlap with the legacy solution

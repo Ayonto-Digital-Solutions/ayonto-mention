@@ -301,8 +301,15 @@ so importing this package into an environment that does not yet have the table
 settles the question there for good. Taking over the existing component means
 taking over its ownership, and that is the trade this release makes deliberately
 rather than recreating a table an installed application already depends on.
-Ownership scopes row-level access; it grants no privilege, and ordinary users
-receive none on this table.
+Ownership scopes row-level access; privileges still come from Dataverse security
+roles. **v1.1.0 ships no security role and does not change the privileges an
+environment already has configured.** Restricting direct writes to the table is
+part of the server-side migration and cutover, not of this packaging release.
+
+An environment still running the older mention control may need direct access to
+this table for *that* implementation to keep working — it writes rows from the
+browser. That is migration compatibility, not the new architecture, and this
+release deliberately leaves it alone.
 
 **It installs beside an older Ayonto mention control rather than over it.** The
 earlier product occupies `Ayonto.MentionControl`; this one has a name of its own

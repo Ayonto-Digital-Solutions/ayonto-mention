@@ -300,11 +300,32 @@ client-side property secures nothing on its own: if ordinary users held Create
 privilege on the ledger, someone could post a forged notification event straight
 at the Web API and never involve the control at all.
 
-So the privilege is not granted.
+So the privilege must not be granted. **That is a target, and v1.1.0 does not
+yet reach it.**
 
-**Ordinary application users get no `Create`, `Update` or `Delete` on the central
-ledger.** They save host records; they do not author events. That is a
-privilege statement, and it is the one that matters.
+**The target:** ordinary application users must not *require* direct `Create`,
+`Update` or `Delete` on the central ledger. They save host records; the trusted
+server ingest authors events. Once that ingest exists, the security design denies
+those direct event-authoring privileges.
+
+**What v1.1.0 actually does about it: nothing.** The package carries **no
+security role**. It does not change the privileges an environment already has
+configured, and it therefore cannot guarantee what any given user can do to this
+table today. Dataverse decides that through security roles — *"Create: required
+to make a new record"*, *"Write: required to make changes to a record"*,
+*"Delete: required to permanently remove a record"* — and the roles a user holds
+combine: *"Security role privileges are cumulative"*
+([Security roles and privileges](https://learn.microsoft.com/en-us/power-platform/admin/security-roles-privileges)).
+
+**And in a migrating environment it must stay that way for now.** The legacy
+control writes `ayonto_mention` rows from the browser, so an environment still
+running it may well grant its users exactly the direct access this design wants
+to remove. Taking that access away as part of a packaging release would break the
+legacy control before anything has replaced it. Restricting direct ledger writes
+belongs to the server cutover, not here.
+
+So: **table ownership is decided now. Direct-write privileges are not.** Two
+different decisions, and this release makes only the first.
 
 ### The ledger is user-owned, and that is now a decision
 
@@ -332,10 +353,11 @@ in exchange for a property that the privilege model above already provides.
 
 **User-owned is not the legacy trust model returning.** The two are unrelated
 questions. Ownership decides how row-level access is *scoped* once a privilege
-exists; it does not grant the privilege. Ordinary users still get no `Create`,
-`Update` or `Delete` here, still cannot author an event, and record ownership on
-its own confers nothing — Dataverse authorization remains a matter of security
-role privileges, and this design grants none of the ones that would matter.
+exists; it does not grant the privilege, and record ownership on its own confers
+nothing. Dataverse authorization remains a matter of security role privileges —
+which is exactly why choosing user ownership changes nothing about the intended
+boundary, and also why this release cannot enforce that boundary: it ships no
+role. Both of those follow from the same fact.
 
 If some future requirement genuinely needed organization ownership, it would need
 a different table and an explicit data-migration design. **That is not the plan,
