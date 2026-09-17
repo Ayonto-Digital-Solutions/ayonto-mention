@@ -1,0 +1,280 @@
+# Server-side architecture
+
+How a mention becomes a notification, and which solution owns which part of that.
+
+Nothing described here exists in this repository yet. It is written down so that
+the implementation, when it happens, is the implementation of a decision rather
+than a rediscovery of one — and so that the routes already considered and
+rejected stay rejected.
+
+The client half is documented in the [README](../README.md). It ends where this
+document begins: the control writes a text column and a companion metadata
+column as bound outputs, the host form saves the record, and that save is the
+only commit boundary there is.
+
+## The shape of it
+
+```mermaid
+flowchart TD
+    pcf["Ayonto Mention PCF"] --> text["bound output: source text"]
+    pcf --> meta["bound output: companion metadata"]
+    text --> save["Source-record save"]
+    meta --> save
+    save -.-> step["planned: async PostOperation step<br/>on the host source table"]
+    step -.-> ledger["planned: central event ledger"]
+    ledger -.-> dispatcher["planned: dispatcher"]
+    dispatcher -.-> channels["planned: e-mail · Teams · in-app"]
+```
+
+Solid arrows exist today. Everything dotted is designed and unbuilt.
+
+## Two solutions, and why
+
+A mention control is reusable. The tables people write mentions in are not: they
+belong to whichever application the customer actually runs. That difference is
+not an inconvenience to design around — it is the seam the packaging follows.
+
+### The base product solution — `AyontoMention`
+
+Owns everything that is the same for every host:
+
+- the code component `Ayonto.AyontoMentionControl`
+- the central event ledger table, its columns, choices and keys
+- the plug-in package, assembly and plug-in types
+- the security components the ledger needs
+- later: the dispatcher and per-channel delivery state
+
+### The host solution
+
+Owns everything that is specific to one application:
+
+- its own business tables and the text columns people write in
+- **one companion metadata column per mention-enabled text column**
+- the form bindings to `Ayonto.AyontoMentionControl`
+- the concrete SDK message processing steps registered on its source tables
+- the mapping from each text column to its companion column
+- whatever presentation or delivery configuration is particular to that host
+
+The host solution therefore declares a dependency on `AyontoMention`, and
+Dataverse enforces it: the base solution must be installed first, and it cannot
+be uninstalled while a host solution still depends on it.
+
+## Why the host owns the companion columns
+
+Not a limitation worked around — a property of how solutions are built.
+
+A column is a solution component that lives inside a table, and Microsoft states
+the constraint plainly: *"Each of those components requires a table to exist.
+Except for choice columns, all other columns can't exist outside of a table"*
+([Solution concepts](https://learn.microsoft.com/en-us/power-platform/alm/solution-concepts-alm)).
+A solution can only carry a column for a table it names while it is being built.
+`AyontoMention` is built long before it knows which application will use it, so
+it cannot carry companion columns for tables it has never heard of. No
+mechanism changes that, and looking for one is looking for a way around solution
+composition rather than with it.
+
+The host application, on the other hand, knows its own tables exactly. Adding a
+companion column there is ordinary schema work in the solution that already owns
+the table it belongs to.
+
+There is a second reason to want it that way. Uninstalling a managed solution
+removes *"data stored in custom columns that are part of the managed solution on
+other tables that aren't part of the managed solution"* (same article). A
+companion column shipped by the base product would take its contents with it
+whenever the base product were removed — including from a host that still
+wanted them.
+
+**A reusable base solution plus a dependent host solution is the intended
+packaging model, not a shortfall in it.**
+
+## The step model
+
+For each mention-enabled source table, the host solution registers two steps
+against the plug-in type supplied by `AyontoMention`.
+
+### `Create`
+
+| Setting | Value |
+|---|---|
+| Message | `Create` |
+| Primary Entity | the host source table |
+| Stage | PostOperation |
+| Execution mode | **Asynchronous** |
+| Post Image | only the source text columns and their companion metadata columns |
+
+Early exit when the image carries no mention metadata, which is the ordinary
+case for a record created without mentioning anybody.
+
+### `Update`
+
+| Setting | Value |
+|---|---|
+| Message | `Update` |
+| Primary Entity | the host source table |
+| Stage | PostOperation |
+| Execution mode | **Asynchronous** |
+| Filtering Attributes | **only the companion metadata columns** |
+| Post Image | the source text columns and their companion metadata columns |
+| Unsecure Configuration | the mapping from each text column to its companion column |
+
+### Why each of those
+
+**A step per host table rather than one global step.** A step registered with no
+primary entity runs for every table that supports the message — *"If a primary
+entity isn't specified for core messages like `Update`, `Delete`, `Retrieve`, and
+`RetrieveMultiple` … the plug-in will be invoked for all entities that support
+that message"*
+([Register a plug-in](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/register-plug-in)).
+That would mean an invocation on every update of every table in the environment,
+including tables this product has nothing to do with. It would also forfeit
+filtering attributes, which the same article ties to having set a primary entity.
+Registering against the host's own table costs the host one declaration and
+spares the environment all of it.
+
+**Filtering on the companion columns only.** Microsoft's guidance is explicit:
+*"If no filtering attributes are set for a plug-in registration step, then the
+plug-in executes every time an update message occurs for that event"*, and warns
+that this combines badly with auto-save
+([Include filtering attributes](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/best-practices/business-logic/include-filtering-attributes-plugin-registration)).
+Filtering on the metadata columns means ordinary typing, which changes only the
+text, never wakes the step at all.
+
+It also happens to be exactly right for the case the product exists for. When
+one person is swapped for another behind identical visible text — two colleagues
+share a display name, the writer picks the other one — the text does not change
+by a single byte, but `recipientUserId` and `eventId` in the companion column do.
+The step is filtered on precisely the column that moved.
+
+**Asynchronous, not synchronous.** A synchronous PostOperation step runs *"within
+the database transaction"*, and *"An exception thrown by your code at any
+synchronous stage within the database transaction causes the entire transaction
+to roll back"*
+([Event framework](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/event-framework)).
+That would make a notification defect capable of refusing somebody's business
+record. Asynchronous PostOperation steps *"run outside of the database
+transaction using the asynchronous service"* (same article), so the record is
+already saved and durable when the work begins, and no failure in it can take the
+save back. A notification is not part of the customer's transaction and must not
+behave as if it were.
+
+The reason this is affordable is the host-specific registration. An asynchronous
+step queues a system job whenever it matches, before any of our code could
+decide otherwise — so a *global* asynchronous step would queue a job for every
+update in the environment. Filtered to one table and a few columns, it queues one
+only when a mention actually changed.
+
+**Post images rather than a retrieve.** A post image *"captures a 'snapshot' of
+the table with the fields you're interested in"*, and Microsoft names retrieving
+the values instead as *"not a good practice for performance"* (Register a
+plug-in). The same article records the two constraints that matter here: a post
+image is available only for PostOperation steps, and `Create` and `Update` both
+support images. The default of selecting all columns is explicitly warned
+against — the image carries the text and metadata columns and nothing else.
+
+**Mapping in the unsecure configuration.** Which text column a companion column
+belongs to is knowledge the host has and the base product cannot infer. It
+travels with the step that the host registered. Secure configuration would not
+work for this: it *"isn't included with the step registration when you export a
+solution"* (Register a plug-in), and this mapping is not a secret — it is part of
+the declaration.
+
+## Cross-solution ownership
+
+The plug-in assembly and its types belong to `AyontoMention`. The concrete steps
+belong to the host solution. There is no such thing as half a step: in Dataverse
+a step *is* the registration — the message, the table, the stage, the mode, the
+filters and the handler, in one component.
+
+Both halves are solution components. *"**Sdk Message Processing Steps** are also
+solution components and must also be added to an unmanaged solution in order to
+be distributed"* (Register a plug-in), and the same article describes this exact
+arrangement when adding a step without its assembly: *"The only time you wouldn't
+select this is if your solution is designed to be installed in an environment
+where another solution containing the assembly is already installed."*
+
+That is the host solution's situation precisely. It carries the steps; the base
+solution carries the assembly they point at; the dependency between them is
+declared and enforced.
+
+## What the server may believe
+
+The companion column sits on a business record and is writable by anyone who may
+write the text column. Everything in it arrives as a claim.
+
+### Untrusted — from the companion column
+
+`schemaVersion` · `sourceField` · `eventId` · `recipientUserId` · `occurrences`
+
+Each is validated, none is believed on its own:
+
+- an unknown `schemaVersion` is refused, never guessed at
+- `sourceField` is accepted only where it matches the step's own configuration —
+  the mapping the host declared, not the value the payload asserts
+- `recipientUserId` is resolved against `systemuser` and checked for being a real,
+  enabled user before anything is written about them
+- `occurrences` may be checked for structural sense against the text in the image,
+  and may never authorize anything. They exist so a saved record can be reopened
+  and read as people rather than characters
+- a display name or an e-mail address is never an identity, wherever it came from
+
+### Trusted — from the execution context
+
+The table, the record id, the initiating user, the operation, the committed state
+in the image. These come from the platform, not from a payload.
+
+### `eventId` identifies; it does not authorize
+
+It exists so that processing the same episode twice does not notify twice:
+
+| Situation | Meaning |
+|---|---|
+| same `eventId`, same immutable identity | a replay — no-op |
+| same `eventId`, different immutable identity | a conflict — refuse, do not overwrite |
+
+The immutable identity of a notification stays
+`eventId` + `recordTable` + `recordId` + `sourceField` + `recipientUserId`.
+Occurrence positions are not part of it and never become part of it.
+
+## Delivery
+
+Out of scope for the ingest work, and listed here so its scope is not quietly
+lost: the dispatcher is expected to cover **e-mail, Teams and in-app
+notification** — three channels, not one.
+
+Delivery state is kept **per channel**. One column cannot mean both "the mail
+arrived" and "the chat message did not", so it does not try to.
+
+External delivery is **best-effort**. No exactly-once or guaranteed-delivery
+claim is made anywhere in this product.
+
+## Routes not taken
+
+| Rejected | Why |
+|---|---|
+| The client writing ledger rows directly | Puts the commit boundary in a browser. A record abandoned without saving would still have notified somebody |
+| A separate command row committed independently of the save | Same defect in a different shape, plus a second write path into the source text. The source-record save is the commit boundary, and there is only one |
+| One global step with no primary entity | Runs on every table in the environment and cannot use filtering attributes |
+| A central table mapping every text column to its companion column | Unnecessary once the host registers its own steps: the registration *is* the mapping, and only a solution can create one |
+| A Power Automate ingest flow per source table | Needs a connection per host and per table, and puts validation in a place that cannot be trusted with it |
+| Synchronous ingest inside the save transaction | Lets a notification defect refuse somebody's business record |
+
+## What must be proven in a real environment
+
+None of this is finished until it has run somewhere. The following are proofs,
+not features, and none of them can be claimed from documentation alone:
+
+- registering both steps against a plug-in type supplied by a *different*
+  installed solution
+- exporting those steps with the host solution and importing them as managed
+- the declared dependency between host and base solution behaving on import,
+  upgrade and uninstall
+- post images arriving with the expected columns on both `Create` and `Update`
+- filtering attributes actually suppressing the step for text-only edits
+- an asynchronous failure leaving the source-record save untouched
+- the same-display-name replacement waking the `Update` step
+- unsecure configuration surviving export and import
+- the ledger staying unreadable to ordinary callers, over both the Web API and TDS
+
+Until an Ayonto Dataverse development environment exists, none of this is built,
+and no production solution source is hand-authored. See
+[`powerplatform/README.md`](../powerplatform/README.md).
