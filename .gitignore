@@ -19,3 +19,6 @@ coverage/
 
 # Stray home-directory folder occasionally created by the PAC CLI on macOS
 ~/
+
+# Byte-code from running the checks in .github/scripts
+__pycache__/
