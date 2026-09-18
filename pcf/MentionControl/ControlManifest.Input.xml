@@ -11,7 +11,7 @@
        where it is used. So this keeps the Ayonto namespace and takes a name of
        its own, and the two can sit on the same form.
        https://learn.microsoft.com/power-apps/developer/component-framework/faq -->
-  <control namespace="Ayonto" constructor="AyontoMentionControl" version="1.1.0" display-name-key="MentionControl_Display_Key" description-key="MentionControl_Desc_Key" control-type="virtual" >
+  <control namespace="Ayonto" constructor="AyontoMentionControl" version="1.2.0" display-name-key="MentionControl_Display_Key" description-key="MentionControl_Desc_Key" control-type="virtual" >
     <!-- This control calls no third-party service. Mentions are looked up through
          the Dataverse Web API of the environment the control already runs in. -->
     <external-service-usage enabled="false">
@@ -59,6 +59,50 @@
          working untouched. A value below 1 or above 30 is taken as the nearest of
          the two; a value that cannot be read as a number at all, or none, is 3. -->
     <property name="minRows" display-name-key="MinRows_Display_Key" description-key="MinRows_Desc_Key" of-type="Whole.None" usage="input" required="false" default-value="3" />
+
+    <!-- Notification settings, per channel.
+
+         This is the one place a maker configures how a mention on this field
+         becomes a notification. The properties defined in a manifest are
+         "rendered as configuration fields so that the user configuring the
+         component can specify values", and default-value is "the default
+         configuration value provided to the component" — allowed on inputs
+         only, "since the bound parameters expect to have a column associated".
+         https://learn.microsoft.com/power-apps/developer/component-framework/manifest-schema-reference/property
+
+         What these are NOT is delivery authority. The control reads none of
+         them, copies none of them into the companion metadata or the bound
+         text, and sends nothing anywhere. They are here so the maker has one
+         configuration surface and so Dataverse persists that configuration in
+         the published form metadata, which is what the server reads and
+         validates — per record table and source field, failing closed when two
+         published forms disagree. See docs/server-architecture.md.
+
+         All twelve are optional, and all three channels default to off. That is
+         not politeness: an imported code component may gain optional properties
+         in a later version but not required ones, so forms configured before
+         these existed keep working, and a form that was never configured for
+         notifications does not start sending any.
+
+         Nothing here is required at manifest level, including the message text.
+         "Subject is required when e-mail is on" is a conditional rule, the
+         manifest has no way to say it, and the server has to check it anyway —
+         so it is checked in exactly one place, on the server, rather than
+         half-enforced in a form designer. -->
+    <property name="emailEnabled" display-name-key="EmailEnabled_Display_Key" description-key="EmailEnabled_Desc_Key" of-type="TwoOptions" usage="input" required="false" default-value="false" />
+    <property name="emailSubject" display-name-key="EmailSubject_Display_Key" description-key="EmailSubject_Desc_Key" of-type="SingleLine.Text" usage="input" required="false" />
+    <property name="emailBody" display-name-key="EmailBody_Display_Key" description-key="EmailBody_Desc_Key" of-type="SingleLine.TextArea" usage="input" required="false" />
+    <property name="emailLinkText" display-name-key="EmailLinkText_Display_Key" description-key="EmailLinkText_Desc_Key" of-type="SingleLine.Text" usage="input" required="false" />
+
+    <property name="teamsEnabled" display-name-key="TeamsEnabled_Display_Key" description-key="TeamsEnabled_Desc_Key" of-type="TwoOptions" usage="input" required="false" default-value="false" />
+    <property name="teamsTitle" display-name-key="TeamsTitle_Display_Key" description-key="TeamsTitle_Desc_Key" of-type="SingleLine.Text" usage="input" required="false" />
+    <property name="teamsBody" display-name-key="TeamsBody_Display_Key" description-key="TeamsBody_Desc_Key" of-type="SingleLine.TextArea" usage="input" required="false" />
+    <property name="teamsLinkText" display-name-key="TeamsLinkText_Display_Key" description-key="TeamsLinkText_Desc_Key" of-type="SingleLine.Text" usage="input" required="false" />
+
+    <property name="inAppEnabled" display-name-key="InAppEnabled_Display_Key" description-key="InAppEnabled_Desc_Key" of-type="TwoOptions" usage="input" required="false" default-value="false" />
+    <property name="inAppTitle" display-name-key="InAppTitle_Display_Key" description-key="InAppTitle_Desc_Key" of-type="SingleLine.Text" usage="input" required="false" />
+    <property name="inAppBody" display-name-key="InAppBody_Display_Key" description-key="InAppBody_Desc_Key" of-type="SingleLine.TextArea" usage="input" required="false" />
+    <property name="inAppLinkText" display-name-key="InAppLinkText_Display_Key" description-key="InAppLinkText_Desc_Key" of-type="SingleLine.Text" usage="input" required="false" />
 
     <resources>
       <code path="index.ts" order="1"/>

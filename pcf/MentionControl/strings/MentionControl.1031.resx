@@ -153,6 +153,78 @@
   <data name="MinRows_Desc_Key" xml:space="preserve">
     <value>Kleinste Höhe des Felds, gezählt in Textzeilen. Nötig, weil ein modellgesteuertes Formular einem Code-Component nicht mitteilt, wie hoch es das Feld angelegt hat. Werte unter 1 oder über 30 gelten als 1 bzw. 30; ist nichts Brauchbares gesetzt, sind es 3 Zeilen.</value>
   </data>
+  <data name="EmailEnabled_Display_Key" xml:space="preserve">
+    <value>E-Mail-Benachrichtigungen</value>
+  </data>
+  <data name="EmailEnabled_Desc_Key" xml:space="preserve">
+    <value>E-Mail-Benachrichtigungen für Erwähnungen in diesem Feld aktivieren. Ohne Aktivierung ausgeschaltet.</value>
+  </data>
+  <data name="EmailSubject_Display_Key" xml:space="preserve">
+    <value>E-Mail-Betreff</value>
+  </data>
+  <data name="EmailSubject_Desc_Key" xml:space="preserve">
+    <value>Betreff für E-Mail-Benachrichtigungen aus Erwähnungen in diesem Feld.</value>
+  </data>
+  <data name="EmailBody_Display_Key" xml:space="preserve">
+    <value>E-Mail-Nachricht</value>
+  </data>
+  <data name="EmailBody_Desc_Key" xml:space="preserve">
+    <value>Nachrichtentext für E-Mail-Benachrichtigungen aus Erwähnungen in diesem Feld.</value>
+  </data>
+  <data name="EmailLinkText_Display_Key" xml:space="preserve">
+    <value>E-Mail-Linktext</value>
+  </data>
+  <data name="EmailLinkText_Desc_Key" xml:space="preserve">
+    <value>Text des Links zurück zum Datensatz, verwendet in E-Mail-Benachrichtigungen aus Erwähnungen in diesem Feld.</value>
+  </data>
+  <data name="TeamsEnabled_Display_Key" xml:space="preserve">
+    <value>Teams-Benachrichtigungen</value>
+  </data>
+  <data name="TeamsEnabled_Desc_Key" xml:space="preserve">
+    <value>Teams-Benachrichtigungen für Erwähnungen in diesem Feld aktivieren. Ohne Aktivierung ausgeschaltet.</value>
+  </data>
+  <data name="TeamsTitle_Display_Key" xml:space="preserve">
+    <value>Teams-Titel</value>
+  </data>
+  <data name="TeamsTitle_Desc_Key" xml:space="preserve">
+    <value>Titel für Teams-Benachrichtigungen aus Erwähnungen in diesem Feld.</value>
+  </data>
+  <data name="TeamsBody_Display_Key" xml:space="preserve">
+    <value>Teams-Nachricht</value>
+  </data>
+  <data name="TeamsBody_Desc_Key" xml:space="preserve">
+    <value>Nachrichtentext für Teams-Benachrichtigungen aus Erwähnungen in diesem Feld.</value>
+  </data>
+  <data name="TeamsLinkText_Display_Key" xml:space="preserve">
+    <value>Teams-Linktext</value>
+  </data>
+  <data name="TeamsLinkText_Desc_Key" xml:space="preserve">
+    <value>Text des Links zurück zum Datensatz, verwendet in Teams-Benachrichtigungen aus Erwähnungen in diesem Feld.</value>
+  </data>
+  <data name="InAppEnabled_Display_Key" xml:space="preserve">
+    <value>In-App-Benachrichtigungen</value>
+  </data>
+  <data name="InAppEnabled_Desc_Key" xml:space="preserve">
+    <value>In-App-Benachrichtigungen für Erwähnungen in diesem Feld aktivieren. Ohne Aktivierung ausgeschaltet.</value>
+  </data>
+  <data name="InAppTitle_Display_Key" xml:space="preserve">
+    <value>In-App-Titel</value>
+  </data>
+  <data name="InAppTitle_Desc_Key" xml:space="preserve">
+    <value>Titel für In-App-Benachrichtigungen aus Erwähnungen in diesem Feld.</value>
+  </data>
+  <data name="InAppBody_Display_Key" xml:space="preserve">
+    <value>In-App-Nachricht</value>
+  </data>
+  <data name="InAppBody_Desc_Key" xml:space="preserve">
+    <value>Nachrichtentext für In-App-Benachrichtigungen aus Erwähnungen in diesem Feld.</value>
+  </data>
+  <data name="InAppLinkText_Display_Key" xml:space="preserve">
+    <value>In-App-Linktext</value>
+  </data>
+  <data name="InAppLinkText_Desc_Key" xml:space="preserve">
+    <value>Text des Links zurück zum Datensatz, verwendet in In-App-Benachrichtigungen aus Erwähnungen in diesem Feld.</value>
+  </data>
   <data name="Editor_Placeholder" xml:space="preserve">
     <value>Mit @ jemanden erwähnen</value>
   </data>
