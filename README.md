@@ -60,7 +60,8 @@ Everything below is about the **client**. The server side does not exist yet.
 | Automated tests and CI | ✅ implemented |
 | Suggestion popup portalled and positioned against the field, through Fluent's positioning: opens below, flips above where there is no room, stays inside the viewport, follows the field when a form pane scrolls | ✅ implemented in code — the flipping, shifting, scrolling and resizing are a browser's arithmetic and are checked in a real environment, not in the test suite |
 | Central `ayonto_mention` table packaged with the solution | ✅ from v1.1.0 — the table is installed by the import |
-| Host-side ingest step, dispatcher, e-mail/Teams/in-app delivery | ⏳ planned, see [Roadmap](#roadmap) and [docs/server-architecture.md](docs/server-architecture.md) |
+| Product-owned `ayonto_mentionevent` event table replacing it | ⏳ target, see [Target architecture](docs/server-architecture.md#target-architecture) |
+| Host-side ingest step, universal dispatcher, e-mail/Teams/in-app delivery | ⏳ planned, see [Roadmap](#roadmap) and [docs/server-architecture.md](docs/server-architecture.md) |
 
 **Selecting a mention does not send anything today, and does not write a row to
 `ayonto_mention` either.** The control writes the text and the mention metadata
@@ -97,6 +98,14 @@ why the ingest is an asynchronous plug-in step registered by the host solution
 rather than a flow, and what a server may and may not believe about the companion
 column, are written down in
 [`docs/server-architecture.md`](docs/server-architecture.md).
+
+**Where it is going** is written down in the same file, under
+[Target architecture](docs/server-architecture.md#target-architecture): a
+product-owned event table, one event row per recipient per mention episode, a
+single notification flow shared by every host application rather than one per
+application, delivery state kept per channel, and notification settings
+configured on the component itself. None of it is built, and two questions in it
+are explicitly still open.
 
 ## Component configuration
 
@@ -433,8 +442,10 @@ one the legacy solution exports, copied in unchanged. See
    popup's flip, shift, scroll and resize behaviour gets verified against a real
    browser
 3. Generate the solution and schema with supported Microsoft tooling
-4. Central `ayonto_mention` table packaged with the solution — **done in v1.1.0**,
-   reusing the table the legacy solution exports rather than designing a new one
+4. Central table packaged with the solution — **done in v1.1.0**, reusing the
+   table the legacy solution exports rather than designing a new one. Superseded
+   as the product ledger by the product-owned `ayonto_mentionevent` table in
+   [Target architecture](docs/server-architecture.md#target-architecture)
 5. Host-side ingest — asynchronous PostOperation plug-in steps that the host
    solution registers on its own source tables, against the plug-in type this
    solution supplies. See [`docs/server-architecture.md`](docs/server-architecture.md)
