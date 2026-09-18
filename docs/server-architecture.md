@@ -35,18 +35,52 @@ and to nothing else:
 | Display name | Mention |
 | Schema name | `ayonto_MentionEvent` |
 | Logical name | `ayonto_mentionevent` |
+| **Ownership** | **Organization-owned** |
 
 It is a **separate component from the table the current release packages**, not a
-rename of it. The currently packaged table came from the legacy product and was
+rename of it.
+
+**Organization ownership is a deliberate choice for this table**, and it has to be
+made now rather than later: ownership is picked when a table is created and
+*"Once a table is created, the ownership type can't be changed"* — changing it
+means deleting the table and creating a new one
+([Types of tables](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/types-of-entities)).
+
+The reason is what the table is. A Mention Event is product and system state,
+written authoritatively by the server. It is not semantically owned by whoever
+happened to edit the business record, and record ownership must never become
+notification identity or authorization. The current release's table is user-owned
+only because it was inherited from another product — that is a property of *that*
+table, not a precedent for this one.
+
+| | Table | Ownership |
+|---|---|---|
+| **Current v1.1.0** | legacy-derived `ayonto_mention` | **UserOwned** |
+| **Target** | product-owned `ayonto_mentionevent` | **Organization-owned** | The currently packaged table came from the legacy product and was
 reused to prove that a database-carrying package imports and coexists; that
 question is answered, and reusing another product's table is not the target.
 
-> **Version naming is an open item.** The intended version has been referred to
-> as `1.1.0.1`. This repository's version tooling currently expresses a
-> three-part `MAJOR.MINOR.PATCH` product version, from which the four-part
-> Dataverse solution version is derived as `<version>.0`; `check-release-version.py`
-> refuses a four-part product version today. The exact string has to be settled
-> before the release, and that is a decision, not an oversight to code around.
+### Two version numbers, and they are not the same number
+
+The target Dataverse solution and release version is **`1.1.0.1`**.
+
+That is an ordinary solution version, not an unusual one. *"A solution's version
+has the following format: major.minor.build.revision"*, and the article's own
+example of a small update on top of `3.1.5.7` is `3.1.5.8`
+([Update a solution](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/update-solutions)).
+
+The **code component** carries a different number under a different scheme: the
+manifest's `version` attribute *"defines the version of the component defined in
+Semantic Versioning"*
+([control element](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/manifest-schema-reference/control)),
+which is three-part `MAJOR.MINOR.PATCH`.
+
+Both are correct; they are simply not the same thing. This repository's release
+tooling currently treats them as one, deriving the solution version from the
+product version as `<version>.0`, which cannot express a revision. **Separating
+them is implementation work on the tooling, not a reopened product decision**, and
+it is not done in this documentation change. The component's own next patch
+number is deliberately not named here.
 
 ### One event row means one recipient in one episode
 
@@ -126,10 +160,37 @@ directly to a connection"*, so that *"during solution import into a target
 environment, a connection is provided for all the connection references"*
 ([Use a connection reference in a solution](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/create-connection-reference)).
 
-Which solution the dispatcher ships in follows from that: the base product
-solution has so far deliberately carried no connection reference, so that
-importing it asks for nothing. Where the dispatcher lives without giving that up
-is part of the same open question as the configuration surface.
+### The dispatcher gets its own solution
+
+It does not live in the base product solution, and it is not copied into each
+host. It is **one separate, central, solution-aware automation solution** that
+serves every host:
+
+```
+AyontoMention base solution
+    -> code component + Mention Event product components
+
+Central Ayonto Mention automation solution
+    -> the universal dispatcher
+    -> its connection references for e-mail, Teams, in-app
+
+any number of host solutions
+    -> use the component, produce Mention Events
+    -> the same one dispatcher processes all of them
+```
+
+That split has a concrete reason. Connector actions need connection references,
+and a connection is provided for each of them at import time. Keeping them out of
+the base solution is what lets the base solution import without asking for a
+single connection — the property it has had since the beginning and should keep.
+
+What is **not** frozen here: the automation solution's final unique name, and
+whether it is ultimately distributed managed or unmanaged. Those are packaging
+choices that can be settled later without touching the architecture.
+
+What **is** decided: there is one central dispatcher solution shared by all
+hosts. There must not be one dispatcher per host solution, no customer-specific
+notification flow, and no flow that knows a particular host table or schema.
 
 **Not built in this release, and not designed in detail here.**
 
@@ -173,9 +234,9 @@ implemented, and nothing here should be read as saying it is.
 | | Current release | Target |
 |---|---|---|
 | Code component | `Ayonto.AyontoMentionControl` | unchanged |
-| Product table | the legacy-derived table this release packages | `ayonto_mentionevent`, product-owned |
+| Product table | the legacy-derived table this release packages, **UserOwned** | `ayonto_mentionevent`, product-owned, **Organization-owned** |
 | Ingest | none | async PostOperation step, host-registered |
-| Dispatcher | none | one universal solution-aware flow |
+| Dispatcher | none | one universal solution-aware flow, in its own central automation solution |
 | Delivery | none | e-mail · Teams · in-app, state per channel |
 | Maker notification config | none | on the component |
 | Companion metadata | required, host-owned, hand-configured | required today; hand-configuration to disappear later |
@@ -501,9 +562,10 @@ has been withdrawn, because it described a choice that is not available.
 
 From v1.1.0 the solution packages the existing `ayonto_mention` table, and that
 table is **UserOwned**. Everything in this subsection is about *that* table.
-The ownership of the targeted `ayonto_mentionevent` is a separate decision that
-belongs with its creation, because ownership is fixed at creation and cannot be
-revisited afterwards. Not provisionally: Microsoft is explicit that *"Once a
+The targeted `ayonto_mentionevent` is **Organization-owned** — decided, for the
+reasons given under Target architecture above. Both are fixed at creation and
+cannot be revisited afterwards, which is why neither is left to be discovered
+later. Not provisionally: Microsoft is explicit that *"Once a
 table is created, the ownership type can't be changed"*, and again — *"After you
 create a custom table, you can't change the ownership… If you later determine
 that your custom table must be of a different type, you need to delete it and

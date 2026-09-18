@@ -60,7 +60,7 @@ Everything below is about the **client**. The server side does not exist yet.
 | Automated tests and CI | ✅ implemented |
 | Suggestion popup portalled and positioned against the field, through Fluent's positioning: opens below, flips above where there is no room, stays inside the viewport, follows the field when a form pane scrolls | ✅ implemented in code — the flipping, shifting, scrolling and resizing are a browser's arithmetic and are checked in a real environment, not in the test suite |
 | Central `ayonto_mention` table packaged with the solution | ✅ from v1.1.0 — the table is installed by the import |
-| Product-owned `ayonto_mentionevent` event table replacing it | ⏳ target, see [Target architecture](docs/server-architecture.md#target-architecture) |
+| Product-owned, Organization-owned `ayonto_mentionevent` event table replacing it | ⏳ target, see [Target architecture](docs/server-architecture.md#target-architecture) |
 | Host-side ingest step, universal dispatcher, e-mail/Teams/in-app delivery | ⏳ planned, see [Roadmap](#roadmap) and [docs/server-architecture.md](docs/server-architecture.md) |
 
 **Selecting a mention does not send anything today, and does not write a row to
@@ -101,11 +101,15 @@ column, are written down in
 
 **Where it is going** is written down in the same file, under
 [Target architecture](docs/server-architecture.md#target-architecture): a
-product-owned event table, one event row per recipient per mention episode, a
-single notification flow shared by every host application rather than one per
-application, delivery state kept per channel, and notification settings
-configured on the component itself. None of it is built, and two questions in it
-are explicitly still open.
+product-owned, organization-owned event table; one event row per recipient per
+mention episode; one notification flow in its own central automation solution,
+shared by every host application rather than copied into each; delivery state
+kept per channel; and notification settings configured on the component itself.
+
+None of it is built. Two things in it are deliberately left open — how component
+settings reach the server authoritatively, and what eventually replaces the
+hand-configured companion column — and both are marked as such where they appear,
+rather than described as if they were settled.
 
 ## Component configuration
 

@@ -100,7 +100,7 @@ A hand-written `RibbonDiff.xml` is a fourth: the packer answers it with a
 | Publisher choice value prefix | `14144`         |
 | Code component                | `Ayonto.AyontoMentionControl` |
 | Table (current)               | `ayonto_mention`, **UserOwned**, from v1.1.0 |
-| Table (target)                | `ayonto_mentionevent`, product-owned — see [Target architecture](../docs/server-architecture.md#target-architecture); **not built** |
+| Table (target)                | `ayonto_mentionevent`, product-owned, **Organization-owned** — see [Target architecture](../docs/server-architecture.md#target-architecture); **not built** |
 
 **The choice value prefix is taken from the publisher that already exists.**
 Dataverse derives the values of choices created under a publisher from it, and
