@@ -106,10 +106,12 @@ mention episode; one notification flow in its own central automation solution,
 shared by every host application rather than copied into each; delivery state
 kept per channel; and notification settings configured on the component itself.
 
-None of it is built. Two things in it are deliberately left open — how component
-settings reach the server authoritatively, and what eventually replaces the
-hand-configured companion column — and both are marked as such where they appear,
-rather than described as if they were settled.
+None of it is built. How those component settings reach the server
+authoritatively is now decided: the server resolves the published control
+configuration from form metadata, per table and field, instead of trusting what a
+client sent. One thing in it is still deliberately left open — what eventually
+replaces the hand-configured companion column — and it is marked as such where it
+appears, rather than described as if it were settled.
 
 ## Component configuration
 

@@ -119,14 +119,133 @@ maker-set rather than column-bound, and `display-name-key` / `description-key`
 are *"used in the customization screens"*
 ([Property element](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/manifest-schema-reference/property)).
 
-> **Open item, and it is the important one.** *How these settings reach the
-> server authoritatively is not solved.* A value a maker typed into a form
-> configuration is not automatically delivery authority — the same reasoning that
-> keeps a client-supplied address from deciding who gets a message applies here.
-> Whether the settings travel as configuration the server reads, or by some other
-> route, must be decided **before the schema and configuration contract are
-> frozen.** Nothing in this repository implements it, and no part of this section
-> should be read as a claim that it does.
+Those settings are not delivery authority because a browser sent them. A value a
+maker typed into a form configuration reaches the server the way everything else
+from a client reaches it — as a claim — and the reasoning that keeps a
+client-supplied recipient from deciding who gets a message applies just as well
+to a client-supplied subject line, a client-supplied body, and above all to a
+client-supplied *"Teams is on"*.
+
+**That was the open question, and it is now settled.** The component stays the
+one place a maker configures notification behaviour. The server does not learn
+that configuration from the payload: it resolves the **published** Mention
+control configuration from Dataverse form metadata and validates it before a
+Mention Event exists. Neither the browser nor the companion payload is delivery
+authority, and nothing downstream may treat them as if they were.
+
+### How that configuration reaches the server
+
+A model-driven form is a Dataverse row, and its definition is readable
+server-side. `SystemForm` is *"Organization-owned entity customizations including
+form layout and dashboards"*; its `FormXml` column is documented as the *"XML
+representation of the form layout"*; and publication state belongs to the same
+row — `ComponentState` distinguishes **Published** from **Unpublished**, and
+`PublishedOn` records when publication happened
+([SystemForm table/entity reference](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/systemform)).
+
+What that XML may carry is documented as well. The Form XML schema — *"the schema
+definition for form customizations for model-driven apps"* — defines a
+`controlDescriptions` element whose `controlDescription` children each take a
+**required `forControl` attribute**, and each of those may contain
+`customControl` elements with an `id`, an optional `name` and `version`, and a
+`parameters` element
+([Form XML schema](https://learn.microsoft.com/en-us/power-apps/developer/model-driven-apps/form-xml-schema)).
+
+So a Mention control instance's configuration is durable metadata, stored against
+the control it belongs to and readable by the server without the client's help.
+That is what makes it usable as authority — not that it is easier to read, but
+that reading it requires believing nobody.
+
+The decided pipeline is:
+
+```
+Mention component configuration
+    -> published SystemForm / FormXml
+    -> server-side Mention ingest
+    -> validate the authoritative field configuration
+    -> validate the recipient and event claims
+    -> create ayonto_mentionevent
+    -> universal dispatcher
+    -> e-mail · Teams · in-app
+```
+
+Resolution and validation happen **once**, in the ingest stage. The dispatcher
+does not read `FormXml`, does not resolve configuration and does not need to know
+that forms exist; it reads the event row it was handed. That is what keeps a
+single dispatcher able to serve every host — a new host adds nothing it has to
+know.
+
+### Configuration identity is the table and the field
+
+The authoritative configuration is resolved by:
+
+```
+recordTable + sourceField
+```
+
+and by nothing else. **Not** by `formId`, not by the browser instance that
+produced the save, not by any configuration the client supplied, and not by the
+identity of the host solution the source field came from.
+
+That is forced by the ingest contract rather than chosen for taste. The ingest
+runs on an ordinary record `Create` or `Update`. The documented plug-in execution
+context for such a request is *"the contextual information passed to a plug-in at
+run-time"*, containing *"information that describes the run-time environment ...
+information related to the execution pipeline, and entity business information"*
+— `MessageName`, `Stage`, `Mode`, `Depth`, `PrimaryEntityName`,
+`PrimaryEntityId`, `InputParameters`, `OutputParameters`, `PreEntityImages`,
+`PostEntityImages`, `InitiatingUserId`, `UserId`, `OrganizationId`,
+`CorrelationId` and the remainder of that list
+([IPluginExecutionContext](https://learn.microsoft.com/en-us/dotnet/api/microsoft.xrm.sdk.ipluginexecutioncontext)).
+**No documented member of it identifies the model-driven form the user was
+looking at.** A save is a save; it does not arrive stamped with a form.
+
+A client could of course *send* a form id. That puts the question back where it
+started, with the server trusting the browser to name its own authority. So the
+server asks instead the question it can answer alone — which field on which table
+— and that question has to have exactly one answer.
+
+### Conflicting configurations fail closed
+
+Nothing prevents a maker placing the same mention-enabled field on several
+published forms, each with its own Mention control instance. The identity above
+admits no tiebreak between them, so the product rule is:
+
+> **Every published Mention control instance for the same `recordTable +
+> sourceField` must carry identical notification settings.**
+
+Where they disagree, the ingest **fails closed**. It does not take the first
+match, the most recently published form, the default form, or the union of what
+it found. No Mention Event is created, and nothing is sent.
+
+The unhelpfulness is the point. Choosing arbitrarily among conflicting
+configurations produces a message whose channels and wording depend on which row
+a query happened to return first — a defect that stays invisible until it sends
+the wrong text to exactly the right person. A configuration conflict is a
+customizing error, it belongs to the maker who made it, and it should be loud
+rather than survivable.
+
+### The event carries a configuration snapshot
+
+The ingest freezes what it resolved. An `ayonto_mentionevent` row carries a
+**snapshot of the notification configuration that was authoritative at the moment
+the event was created** — the channels that were enabled, and the content those
+channels need.
+
+Timing is the reason. A maker who edits and republishes a form must not thereby
+change how an event that already exists is delivered. Without a snapshot, an
+event waiting in a queue would go out under whatever happened to be published
+when the dispatcher reached it, and a retry could differ from the attempt it was
+retrying. With one, an event means the same thing for its whole life.
+
+**The exact Dataverse columns and the exact JSON shape of that snapshot are
+deliberately not decided here.** That is the next design step, and settling it in
+this section — ahead of the rest of the event schema — would freeze the wrong
+half first.
+
+**None of this is built.** Nothing in this repository resolves form metadata,
+validates a configuration, or creates an event. What is settled is the route, not
+its implementation.
 
 ### One dispatcher for every host
 
@@ -145,7 +264,9 @@ any host solution
 
 It is triggered by a newly created `ayonto_mentionevent` row and must know
 nothing about any particular host solution, host table or host schema. The event
-row carries what it needs; that is the point of having one.
+row carries what it needs — including its notification configuration, which the
+ingest already resolved and froze — so the dispatcher reads no form metadata of
+its own. That is the point of having one.
 
 Microsoft's Dataverse trigger supports this shape. The **When a row is added,
 modified or deleted** trigger *"runs a flow whenever a row of a selected table
@@ -240,7 +361,7 @@ implemented, and nothing here should be read as saying it is.
 | Ingest | none | async PostOperation step, host-registered |
 | Dispatcher | none | one universal solution-aware flow, in its own central automation solution |
 | Delivery | none | e-mail · Teams · in-app, state per channel |
-| Maker notification config | none | on the component |
+| Maker notification config | none | set on the component, resolved server-side from published `FormXml` per `recordTable + sourceField` |
 | Companion metadata | required, host-owned, hand-configured | required today; hand-configuration to disappear later |
 
 The target version does not exist. Nothing below the code-component row is built.
