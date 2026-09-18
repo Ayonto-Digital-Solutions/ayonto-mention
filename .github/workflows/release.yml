@@ -7,11 +7,16 @@
 # a tag it does the same work and then publishes what it built. Nothing reaches
 # a release page that was not built by this file from a tagged commit.
 #
-# The solution project is not in the repository. It holds nothing but the code
-# component, so it is created here with the supported commands each time
-# (pac solution init, pac solution add-reference) rather than kept as a second,
-# drifting copy of what the manifest already says. powerplatform/src stays
-# reserved for a real exported Dataverse solution, which this is not.
+# The solution project IS in the repository, under powerplatform/. Until v1.0.2
+# it was not: it was created here on every run with pac solution init, and it
+# held nothing but the code component. That is precisely why every release up to
+# v1.0.2 shipped without a database — a solution synthesised at build time can
+# only carry what the workflow remembers to hand it.
+#
+# From v1.1.0 the source is checked in, so what ships is what can be read in the
+# repository: the ayonto_mention table under powerplatform/src, and the code
+# component through the project reference in the cdsproj. This workflow only
+# stamps the version and builds.
 name: Release
 
 on:
@@ -37,6 +42,11 @@ permissions:
   contents: read
 
 env:
+  # The checked-in solution project: the directory it lives in, and the name the
+  # build gives its output. The project is called AyontoMentionSolution rather
+  # than AyontoMention because a solution project may not share its name with a
+  # component project it references.
+  SOLUTION_DIR: powerplatform
   SOLUTION_PROJECT: AyontoMentionSolution
   SOLUTION_NAME: AyontoMention
   # The versions the packages were built and proved with. Raising one is a
@@ -241,21 +251,23 @@ jobs:
       - name: Build the component for production
         run: npm --prefix pcf run build -- --buildMode production
 
-      # The solution project's own name must differ from the component project's,
-      # or pac refuses the reference and msbuild reports an ambiguous project.
-      # The name Dataverse actually reads is the unique name inside Solution.xml,
-      # which the script below sets, along with the version and the packaging.
-      - name: Assemble the solution project
+      # Read before it is packed. SolutionPackager is silent about the mistakes
+      # that matter here: an entity folder no RootComponent mentions packs
+      # without the table, and a non-empty <Entities /> in Customizations.xml
+      # makes it drop the folder entirely. Both produce a green build and a
+      # package with no database in it.
+      - name: Check the solution source
+        run: python3 .github/scripts/check-solution-source.py
+
+      # The one value a release decides. Everything else about the solution —
+      # unique name, publisher, packaging, and the table itself — is read from
+      # the repository rather than generated here.
+      - name: Stamp the solution version
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          rm -rf "${SOLUTION_PROJECT}"
-          mkdir -p "${SOLUTION_PROJECT}"
-          ( cd "${SOLUTION_PROJECT}" \
-              && pac solution init --publisher-name Ayonto --publisher-prefix ayonto \
-              && pac solution add-reference --path "${GITHUB_WORKSPACE}/pcf" )
-          python3 .github/scripts/prepare-release-solution.py "${SOLUTION_PROJECT}" \
-            --version "${VERSION}.0"
+          python3 .github/scripts/stamp-solution-version.py \
+            "${SOLUTION_DIR}/src/Other/Solution.xml" --version "${VERSION}.0"
 
       # SolutionPackager reports a component it could not take as a line in its
       # log and still exits zero. The log is read, and the packages themselves are
@@ -263,7 +275,7 @@ jobs:
       - name: Pack the solution
         run: |
           set -o pipefail
-          ( cd "${SOLUTION_PROJECT}" && dotnet build -c Release ) | tee /tmp/pack.log
+          ( cd "${SOLUTION_DIR}" && dotnet build -c Release ) | tee /tmp/pack.log
           if grep -qE "will be skipped|not defined in customizations" /tmp/pack.log; then
             echo "::error::SolutionPackager skipped a component — the package is incomplete"
             grep -E "will be skipped|not defined in customizations" /tmp/pack.log
@@ -275,13 +287,13 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           mkdir -p dist
-          built="${SOLUTION_PROJECT}/bin/Release"
+          built="${SOLUTION_DIR}/bin/Release"
           managed="${built}/${SOLUTION_PROJECT}_managed.zip"
           unmanaged="${built}/${SOLUTION_PROJECT}.zip"
           for produced in "${managed}" "${unmanaged}"; do
             if [ ! -s "${produced}" ]; then
               echo "::error::${produced} was not produced"
-              find "${SOLUTION_PROJECT}/bin" -type f >&2 || true
+              find "${SOLUTION_DIR}/bin" -type f >&2 || true
               exit 1
             fi
           done
@@ -392,14 +404,19 @@ jobs:
           # What the packages are, said on the release page itself rather than
           # left to a generated changelog that only lists commits.
           cat > /tmp/notes.md <<NOTES
-          **Ayonto Mention — client release.** This is the Power Apps code
-          component only.
+          **Ayonto Mention.** This package installs the Power Apps code component
+          **and the central \`ayonto_mention\` Dataverse table**.
 
-          Installing it does **not** send notifications. There is no
-          \`ayonto_mention\` event ledger, no ingest or dispatcher flow, no e-mail
-          delivery and no Teams delivery in this package: the control records who
-          was mentioned, and the server-side step that turns that into a message
-          does not exist yet.
+          Importing it creates the table. That is the change in this release:
+          every version up to v1.0.2 was the code component alone.
+
+          **It still does not send notifications.** There is no server-side
+          ingest, no dispatcher, no e-mail, Teams or in-app delivery in this
+          package. Selecting a mention writes the text and the companion metadata
+          onto the record being edited, exactly as before — it does **not** create
+          a row in \`ayonto_mention\`, because the server-side step that would do
+          that is not implemented yet. The table ships so that it can be imported
+          and validated in a real environment ahead of that work.
 
           Two Dataverse solution packages are attached:
 

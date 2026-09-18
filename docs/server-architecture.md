@@ -2,10 +2,15 @@
 
 How a mention becomes a notification, and which solution owns which part of that.
 
-Nothing described here exists in this repository yet. It is written down so that
-the implementation, when it happens, is the implementation of a decision rather
-than a rediscovery of one — and so that the routes already considered and
-rejected stay rejected.
+**One part of this now exists, and it is worth being exact about which.** From
+v1.1.0 the solution package installs the central `ayonto_mention` table: the
+schema is shipped. Nothing writes to it. The ingest step, the dispatcher and
+every delivery channel described below are still designed and unbuilt, so a
+mention still becomes a bound output on a business record and stops there.
+
+The rest is written down so that the implementation, when it happens, is the
+implementation of a decision rather than a rediscovery of one — and so that the
+routes already considered and rejected stay rejected.
 
 The client half is documented in the [README](../README.md). It ends where this
 document begins: the control writes a text column and a companion metadata
@@ -21,12 +26,18 @@ flowchart TD
     text --> save["Source-record save"]
     meta --> save
     save -.-> step["planned: async PostOperation step<br/>on the host source table"]
-    step -.-> ledger["planned: central event ledger"]
+    step -.-> ledger["packaged from v1.1.0:<br/>central ayonto_mention table"]
     ledger -.-> dispatcher["planned: dispatcher"]
     dispatcher -.-> channels["planned: e-mail · Teams · in-app"]
 ```
 
-Solid arrows exist today. Everything dotted is designed and unbuilt.
+Solid arrows exist today. Everything dotted is designed and unbuilt — with one
+exception: the ledger box is a table that v1.1.0 actually installs. The arrows
+into and out of it are not.
+
+**Packaged is not implemented.** The table being present in an environment says
+nothing about anything writing to or reading from it, and this document should
+not be read as if it did.
 
 ## Two solutions, and why
 
@@ -38,8 +49,10 @@ not an inconvenience to design around — it is the seam the packaging follows.
 
 Owns everything that is the same for every host:
 
-- the code component `Ayonto.AyontoMentionControl`
-- the central event ledger table, its columns, choices and keys
+- the code component `Ayonto.AyontoMentionControl` — **shipped**
+- the central `ayonto_mention` table, its columns and its view — **shipped from
+  v1.1.0**, reused unchanged from the legacy product's export rather than
+  designed here
 - the plug-in package, assembly and plug-in types
 - the security components the ledger needs
 - later: the dispatcher and per-channel delivery state
@@ -287,13 +300,69 @@ client-side property secures nothing on its own: if ordinary users held Create
 privilege on the ledger, someone could post a forged notification event straight
 at the Web API and never involve the control at all.
 
-So the privilege is not granted.
+So the privilege must not be granted. **That is a target, and v1.1.0 does not
+yet reach it.**
 
-**Ordinary application users get no `Create`, `Update` or `Delete` on the central
-ledger.** They save host records; they do not author events. The ledger is planned
-as **OrganizationOwned** unless validation in a real environment gives a concrete
-reason to change it — Legacy needed user ownership because the client itself
-created rows, and this design removes that reason.
+**The target:** ordinary application users must not *require* direct `Create`,
+`Update` or `Delete` on the central ledger. They save host records; the trusted
+server ingest authors events. Once that ingest exists, the security design denies
+those direct event-authoring privileges.
+
+**What v1.1.0 actually does about it: nothing.** The package carries **no
+security role**. It does not change the privileges an environment already has
+configured, and it therefore cannot guarantee what any given user can do to this
+table today. Dataverse decides that through security roles — *"Create: required
+to make a new record"*, *"Write: required to make changes to a record"*,
+*"Delete: required to permanently remove a record"* — and the roles a user holds
+combine: *"Security role privileges are cumulative"*
+([Security roles and privileges](https://learn.microsoft.com/en-us/power-platform/admin/security-roles-privileges)).
+
+**And in a migrating environment it must stay that way for now.** The legacy
+control writes `ayonto_mention` rows from the browser, so an environment still
+running it may well grant its users exactly the direct access this design wants
+to remove. Taking that access away as part of a packaging release would break the
+legacy control before anything has replaced it. Restricting direct ledger writes
+belongs to the server cutover, not here.
+
+So: **table ownership is decided now. Direct-write privileges are not.** Two
+different decisions, and this release makes only the first.
+
+### The ledger is user-owned, and that is now a decision
+
+An earlier draft of this document said the ledger was *planned as
+OrganizationOwned unless validation gave a reason to change it*. That sentence
+has been withdrawn, because it described a choice that is not available.
+
+From v1.1.0 the solution packages the existing `ayonto_mention` table, and that
+table is **UserOwned**. Not provisionally: Microsoft is explicit that *"Once a
+table is created, the ownership type can't be changed"*, and again — *"After you
+create a custom table, you can't change the ownership… If you later determine
+that your custom table must be of a different type, you need to delete it and
+create a new one"*
+([Types of tables](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/types-of-entities)).
+
+So the ownership is not packaging metadata a later release can flip. It is part
+of the table, and taking over the existing table means taking over its ownership.
+
+**That is the intended trade, deliberately made.** This product is succeeding the
+legacy component rather than replacing its schema: the same logical table, the
+same columns, already depended on by an installed application. Recreating it as
+organization-owned would mean a different table, a migration of whatever it
+already holds, and a broken dependency for anything that points at the old one —
+in exchange for a property that the privilege model above already provides.
+
+**User-owned is not the legacy trust model returning.** The two are unrelated
+questions. Ownership decides how row-level access is *scoped* once a privilege
+exists; it does not grant the privilege, and record ownership on its own confers
+nothing. Dataverse authorization remains a matter of security role privileges —
+which is exactly why choosing user ownership changes nothing about the intended
+boundary, and also why this release cannot enforce that boundary: it ships no
+role. Both of those follow from the same fact.
+
+If some future requirement genuinely needed organization ownership, it would need
+a different table and an explicit data-migration design. **That is not the plan,
+and nothing here should be read as leaving the door open to it as a small later
+change.**
 
 **The ingest plug-in is the trusted writer**, and Dataverse has a documented way
 to say so. `IOrganizationServiceFactory.CreateOrganizationService(userId)`:

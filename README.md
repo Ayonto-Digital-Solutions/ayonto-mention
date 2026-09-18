@@ -59,11 +59,15 @@ Everything below is about the **client**. The server side does not exist yet.
 | Clicking a confirmed token opens that `systemuser` through `context.navigation.openForm` | ✅ implemented |
 | Automated tests and CI | ✅ implemented |
 | Suggestion popup portalled and positioned against the field, through Fluent's positioning: opens below, flips above where there is no room, stays inside the viewport, follows the field when a form pane scrolls | ✅ implemented in code — the flipping, shifting, scrolling and resizing are a browser's arithmetic and are checked in a real environment, not in the test suite |
-| Central event ledger, host-side ingest step, dispatcher, delivery | ⏳ planned, see [Roadmap](#roadmap) and [docs/server-architecture.md](docs/server-architecture.md) |
+| Central `ayonto_mention` table packaged with the solution | ✅ from v1.1.0 — the table is installed by the import |
+| Host-side ingest step, dispatcher, e-mail/Teams/in-app delivery | ⏳ planned, see [Roadmap](#roadmap) and [docs/server-architecture.md](docs/server-architecture.md) |
 
-**Selecting a mention does not send anything today.** The control writes the text
-and the mention metadata as bound outputs. It writes nothing to Dataverse itself:
-its only Web API calls are a `systemuser` search and a single-user read.
+**Selecting a mention does not send anything today, and does not write a row to
+`ayonto_mention` either.** The control writes the text and the mention metadata
+as bound outputs. It writes nothing to Dataverse itself: its only Web API calls
+are a `systemuser` search and a single-user read. From v1.1.0 the package
+*installs* the table; what fills it is the server-side ingest, which does not
+exist yet.
 
 ## How it works
 
@@ -275,10 +279,37 @@ Each release publishes two Dataverse solution packages:
 | `AyontoMention_<version>_managed.zip` | managed | any environment that is not where this control is developed — test, UAT, production |
 | `AyontoMention_<version>.zip` | unmanaged | a development environment, or to look inside the package |
 
-Both contain the same thing: the Ayonto Mention code component
-`Ayonto.AyontoMentionControl`, published as `Ayonto` with the prefix `ayonto`, in
-the solution `AyontoMention`. Import the package, then add the control to a text
-column on a model-driven form and configure its properties as described above.
+Both contain the same two components, published as `Ayonto` with the prefix
+`ayonto`, in the solution `AyontoMention`:
+
+- the code component `Ayonto.AyontoMentionControl`
+- the central `ayonto_mention` table, with its view and the ownership
+  relationships a user-owned table carries
+
+Import the package, then add the control to a text column on a model-driven form
+and configure its properties as described above.
+
+**The table is reused, not redesigned.** It is the table the productive legacy
+solution exports, carried over unchanged — same logical name, **UserOwned**, same
+sixteen columns, same view. This release repackages it under the `AyontoMention`
+solution; it does not alter it.
+
+**Its ownership is chosen, not inherited by accident.** A Dataverse table's
+ownership is fixed when the table is created and
+[cannot be changed afterwards](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/types-of-entities),
+so importing this package into an environment that does not yet have the table
+settles the question there for good. Taking over the existing component means
+taking over its ownership, and that is the trade this release makes deliberately
+rather than recreating a table an installed application already depends on.
+Ownership scopes row-level access; privileges still come from Dataverse security
+roles. **v1.1.0 ships no security role and does not change the privileges an
+environment already has configured.** Restricting direct writes to the table is
+part of the server-side migration and cutover, not of this packaging release.
+
+An environment still running the older mention control may need direct access to
+this table for *that* implementation to keep working — it writes rows from the
+browser. That is migration compatibility, not the new architecture, and this
+release deliberately leaves it alone.
 
 **It installs beside an older Ayonto mention control rather than over it.** The
 earlier product occupies `Ayonto.MentionControl`; this one has a name of its own
@@ -286,7 +317,7 @@ because it requires configuration that the older contract has no place for, and 
 code component cannot gain required properties in a later version. Both can be
 present in one environment, and a form can carry either.
 
-**What v1.0.0 contains.** The client only:
+**What v1.1.0 contains.** The client, and the table:
 
 - the mention field itself — picker, keyboard, IME-safe editing, atomic
   mention deletion, character counter
@@ -297,15 +328,22 @@ present in one environment, and a form can carry either.
 - English and German resources
 - offline, masking, read-only and column-security behaviour
 
-**What it does not contain**, because it does not exist yet: the central event
-ledger, the host-side ingest step, the dispatcher, e-mail, Teams and in-app
-delivery, and any delivery configuration or state. **Installing this
-release does not send notifications.** The control records who was mentioned;
-turning that into a message is the server-side work still ahead.
+- the central `ayonto_mention` table, its view and its relationships
 
-**What publishing v1.0.0 does and does not say.** It is released as the client
-component: the packages are built, checked and downloadable. It is not a
-statement that any environment has been validated. The automated suite cannot
+**What it does not contain**, because it does not exist yet: the host-side
+ingest step, the dispatcher, e-mail, Teams and in-app delivery, and any delivery
+configuration or state. **Installing this release does not send notifications,
+and writes no rows into the table it installs.** The control records who was
+mentioned; turning that into a row, and that row into a message, is the
+server-side work still ahead.
+
+**What publishing v1.1.0 does and does not say.** The packages are built,
+checked and downloadable. It is not a statement that any environment has been
+validated — and for this release that matters more than it did before, because
+the package now writes schema into the environment that imports it. In
+particular, **an environment that already carries the legacy `AyontoPcfControls`
+solution shares the `ayonto_mention` table with it, and how two managed
+solutions behave over one table has not been tested here.** The automated suite cannot
 prove how a field behaves in a browser on a form — jsdom performs no layout — so
 before calling a particular deployment validated or production-ready, install the
 package in a real model-driven app and work through the behaviour there: field
@@ -356,8 +394,9 @@ Running them from inside `pcf/` works too — there, use plain `npm ci`.
 │   ├── MentionControl/     # PCF manifest, resources and framework adapter
 │   ├── src/                # domain logic, components, hooks, services
 │   └── tests/              # Jest suites
-├── powerplatform/
-│   └── src/                # reserved Dataverse solution source
+├── powerplatform/          # Dataverse solution project and source
+│   ├── AyontoMentionSolution.cdsproj
+│   └── src/                # classic SolutionPackager XML: Entities/, Other/
 ├── docs/
 │   └── server-architecture.md   # the designed server side and who owns it
 ├── CONTRIBUTING.md
@@ -369,10 +408,10 @@ Running them from inside `pcf/` works too — there, use plain `npm ci`.
 the metadata format, hydration — with the framework adapter kept separate, which is
 why most of it is directly unit testable.
 
-`powerplatform/src/` is reserved for the generated Dataverse solution source and
-currently contains placeholders only. **Power Platform YAML must not be
-hand-authored** — every artefact is produced by supported PAC CLI or Dataverse
-tooling and then committed. See [powerplatform/README.md](powerplatform/README.md).
+`powerplatform/` holds the Dataverse solution project and its source. **Power
+Platform solution source must not be hand-authored** — the table there is the
+one the legacy solution exports, copied in unchanged. See
+[powerplatform/README.md](powerplatform/README.md).
 
 ## Design principles
 
@@ -394,7 +433,8 @@ tooling and then committed. See [powerplatform/README.md](powerplatform/README.m
    popup's flip, shift, scroll and resize behaviour gets verified against a real
    browser
 3. Generate the solution and schema with supported Microsoft tooling
-4. Central event ledger with its alternate key
+4. Central `ayonto_mention` table packaged with the solution — **done in v1.1.0**,
+   reusing the table the legacy solution exports rather than designing a new one
 5. Host-side ingest — asynchronous PostOperation plug-in steps that the host
    solution registers on its own source tables, against the plug-in type this
    solution supplies. See [`docs/server-architecture.md`](docs/server-architecture.md)
