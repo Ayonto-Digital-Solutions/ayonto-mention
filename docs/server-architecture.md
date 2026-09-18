@@ -4,7 +4,9 @@ How a mention becomes a notification, and which solution owns which part of that
 
 **One part of this now exists, and it is worth being exact about which.** From
 v1.1.0 the solution package installs the central `ayonto_mention` table: the
-schema is shipped. Nothing writes to it. The ingest step, the dispatcher and
+schema is shipped. Nothing writes to it — and the **Target architecture** section
+immediately below supersedes that table as the product ledger, without changing
+what the current release contains. The ingest step, the dispatcher and
 every delivery channel described below are still designed and unbuilt, so a
 mention still becomes a bound output on a business record and stops there.
 
@@ -17,6 +19,232 @@ document begins: the control writes a text column and a companion metadata
 column as bound outputs, the host form saves the record, and that save is the
 only commit boundary there is.
 
+## Target architecture
+
+**Everything in this section is a target. None of it is built.** It is recorded
+so the shape is settled before anything is written against it, and so the places
+that are *not* settled are visible rather than assumed.
+
+### The product event table
+
+The next planned product version introduces a table that belongs to this product
+and to nothing else:
+
+| | |
+|---|---|
+| Display name | Mention |
+| Schema name | `ayonto_MentionEvent` |
+| Logical name | `ayonto_mentionevent` |
+| **Ownership** | **Organization-owned** |
+
+It is a **separate component from the table the current release packages**, not a
+rename of it.
+
+**Organization ownership is a deliberate choice for this table**, and it has to be
+made now rather than later: ownership is picked when a table is created and
+*"Once a table is created, the ownership type can't be changed"* — changing it
+means deleting the table and creating a new one
+([Types of tables](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/types-of-entities)).
+
+The reason is what the table is. A Mention Event is product and system state,
+written authoritatively by the server. It is not semantically owned by whoever
+happened to edit the business record, and record ownership must never become
+notification identity or authorization. The current release's table is user-owned
+only because it was inherited from another product — that is a property of *that*
+table, not a precedent for this one.
+
+| | Table | Ownership |
+|---|---|---|
+| **Current v1.1.0** | legacy-derived `ayonto_mention` | **UserOwned** |
+| **Target** | product-owned `ayonto_mentionevent` | **Organization-owned** |
+
+The currently packaged table came from the legacy product and was reused to prove
+that a database-carrying package imports and coexists; that question is answered,
+and reusing another product's table is not the target.
+
+### Two version numbers, and they are not the same number
+
+The target Dataverse solution and release version is **`1.1.0.1`**.
+
+That is an ordinary solution version, not an unusual one. *"A solution's version
+has the following format: major.minor.build.revision"*, and the article's own
+example of a small update on top of `3.1.5.7` is `3.1.5.8`
+([Update a solution](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/update-solutions)).
+
+The **code component** carries a different number under a different scheme: the
+manifest's `version` attribute *"defines the version of the component defined in
+Semantic Versioning"*
+([control element](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/manifest-schema-reference/control)),
+which is three-part `MAJOR.MINOR.PATCH`.
+
+Both are correct; they are simply not the same thing. This repository's release
+tooling currently treats them as one, deriving the solution version from the
+product version as `<version>.0`, which cannot express a revision. **Separating
+them is implementation work on the tooling, not a reopened product decision**, and
+it is not done in this documentation change. The component's own next patch
+number is deliberately not named here.
+
+### One event row means one recipient in one episode
+
+The granularity is fixed, because everything downstream depends on it:
+
+> **One `ayonto_mentionevent` row = one mention episode × one recipient.**
+
+- The same person named several times within one episode shares **one** `eventId`
+  and produces **one** row. Occurrences are where a mention is, not how often it
+  is worth telling somebody.
+- A later, genuinely new episode for that person gets a **new** `eventId` and
+  therefore a **new** row.
+
+The immutable notification identity is unchanged:
+
+```
+eventId + recordTable + recordId + sourceField + recipientUserId
+```
+
+### One configuration surface, on the component
+
+For every mention-enabled field, the maker should configure notification
+behaviour **on the Mention component itself** — the place where the field is
+already being configured — rather than in a second place that has to be kept in
+step by hand.
+
+The target configuration covers at least which channels are on (e-mail, Teams,
+in-app) and the content each needs: a subject or title, a message body, and link
+text where a channel uses one.
+
+The framework supports this shape: a manifest `property` is *"a specific,
+configurable piece of data that the component expects"*, an `input` property is
+maker-set rather than column-bound, and `display-name-key` / `description-key`
+are *"used in the customization screens"*
+([Property element](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/manifest-schema-reference/property)).
+
+> **Open item, and it is the important one.** *How these settings reach the
+> server authoritatively is not solved.* A value a maker typed into a form
+> configuration is not automatically delivery authority — the same reasoning that
+> keeps a client-supplied address from deciding who gets a message applies here.
+> Whether the settings travel as configuration the server reads, or by some other
+> route, must be decided **before the schema and configuration contract are
+> frozen.** Nothing in this repository implements it, and no part of this section
+> should be read as a claim that it does.
+
+### One dispatcher for every host
+
+There is **one** central notification flow for the product. Not one per host
+application.
+
+```
+any host solution
+   -> committed mention
+   -> ayonto_mentionevent
+   -> universal Mention dispatcher
+       -> e-mail
+       -> Teams
+       -> in-app
+```
+
+It is triggered by a newly created `ayonto_mentionevent` row and must know
+nothing about any particular host solution, host table or host schema. The event
+row carries what it needs; that is the point of having one.
+
+Microsoft's Dataverse trigger supports this shape. The **When a row is added,
+modified or deleted** trigger *"runs a flow whenever a row of a selected table
+and scope changes or is created"*; the change type determines which operation
+fires it, and the `Organization` scope means *"actions are taken by anyone within
+the environment"*
+([Trigger flows when a row is added, modified, or deleted](https://learn.microsoft.com/en-us/power-automate/dataverse/create-update-delete-trigger)).
+
+The dispatcher is to be **solution-aware**, so that it travels through normal
+ALM. That also decides how its connectors are bound: a connection reference is
+*"a solution component that contains a reference to a connection"*, and
+operations in a solution-aware flow *"bind to a connection reference instead of
+directly to a connection"*, so that *"during solution import into a target
+environment, a connection is provided for all the connection references"*
+([Use a connection reference in a solution](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/create-connection-reference)).
+
+### The dispatcher gets its own solution
+
+It does not live in the base product solution, and it is not copied into each
+host. It is **one separate, central, solution-aware automation solution** that
+serves every host:
+
+```
+AyontoMention base solution
+    -> code component + Mention Event product components
+
+Central Ayonto Mention automation solution
+    -> the universal dispatcher
+    -> its connection references for e-mail, Teams, in-app
+
+any number of host solutions
+    -> use the component, produce Mention Events
+    -> the same one dispatcher processes all of them
+```
+
+That split has a concrete reason. Connector actions need connection references,
+and a connection is provided for each of them at import time. Keeping them out of
+the base solution is what lets the base solution import without asking for a
+single connection — the property it has had since the beginning and should keep.
+
+What is **not** frozen here: the automation solution's final unique name, and
+whether it is ultimately distributed managed or unmanaged. Those are packaging
+choices that can be settled later without touching the architecture.
+
+What **is** decided: there is one central dispatcher solution shared by all
+hosts. There must not be one dispatcher per host solution, no customer-specific
+notification flow, and no flow that knows a particular host table or schema.
+
+**Not built in this release, and not designed in detail here.**
+
+### Delivery state is per channel
+
+One Mention Event may later have independent delivery state for e-mail, Teams and
+in-app. **Not one shared status for all three** — one column cannot mean both
+"the mail arrived" and "the chat message did not", and a single status that
+reports only the first channel is worse than none, because it reads as success.
+
+The delivery table itself is later work and is not designed here.
+
+### The companion metadata transition
+
+The record Save stays the commit boundary. The control must **not** create a
+durable Mention Event because somebody picked a person in a browser — a
+notification must never be able to exist for a business record that was never
+saved.
+
+Where this is going: a maker should eventually **not** have to create and
+configure a companion metadata column by hand for every mention-enabled field.
+
+Where it is now, and why it stays there for the moment: the companion column is
+what currently carries recipient identity, the `eventId`, and the occurrence
+information a saved record is read back with — and it does so *inside the
+record's own save*, which is what makes the commit boundary hold. It is the safe
+bridge, and removing it before something else provides all four properties would
+trade a solved problem for an unsolved one.
+
+| | |
+|---|---|
+| **Current transition** | companion metadata remains the save-and-identity bridge |
+| **End state** | manual companion-column configuration disappears from maker setup |
+| **Open** | what replaces it, while preserving recipient identity, `eventId`, readback identity **and** the save commit boundary |
+
+**The replacement mechanism is an open architecture decision.** It is not
+implemented, and nothing here should be read as saying it is.
+
+### Current release against target, plainly
+
+| | Current release | Target |
+|---|---|---|
+| Code component | `Ayonto.AyontoMentionControl` | unchanged |
+| Product table | the legacy-derived table this release packages, **UserOwned** | `ayonto_mentionevent`, product-owned, **Organization-owned** |
+| Ingest | none | async PostOperation step, host-registered |
+| Dispatcher | none | one universal solution-aware flow, in its own central automation solution |
+| Delivery | none | e-mail · Teams · in-app, state per channel |
+| Maker notification config | none | on the component |
+| Companion metadata | required, host-owned, hand-configured | required today; hand-configuration to disappear later |
+
+The target version does not exist. Nothing below the code-component row is built.
+
 ## The shape of it
 
 ```mermaid
@@ -26,7 +254,7 @@ flowchart TD
     text --> save["Source-record save"]
     meta --> save
     save -.-> step["planned: async PostOperation step<br/>on the host source table"]
-    step -.-> ledger["packaged from v1.1.0:<br/>central ayonto_mention table"]
+    step -.-> ledger["target: ayonto_mentionevent<br/>(v1.1.0 packages the legacy-derived table)"]
     ledger -.-> dispatcher["planned: dispatcher"]
     dispatcher -.-> channels["planned: e-mail · Teams · in-app"]
 ```
@@ -50,9 +278,10 @@ not an inconvenience to design around — it is the seam the packaging follows.
 Owns everything that is the same for every host:
 
 - the code component `Ayonto.AyontoMentionControl` — **shipped**
-- the central `ayonto_mention` table, its columns and its view — **shipped from
-  v1.1.0**, reused unchanged from the legacy product's export rather than
-  designed here
+- the central event table — **currently** the legacy-derived `ayonto_mention`,
+  reused unchanged from that product's export and shipped since v1.1.0;
+  **targeted** to become the product-owned `ayonto_mentionevent` described in
+  Target architecture above
 - the plug-in package, assembly and plug-in types
 - the security components the ledger needs
 - later: the dispatcher and per-channel delivery state
@@ -334,7 +563,11 @@ OrganizationOwned unless validation gave a reason to change it*. That sentence
 has been withdrawn, because it described a choice that is not available.
 
 From v1.1.0 the solution packages the existing `ayonto_mention` table, and that
-table is **UserOwned**. Not provisionally: Microsoft is explicit that *"Once a
+table is **UserOwned**. Everything in this subsection is about *that* table.
+The targeted `ayonto_mentionevent` is **Organization-owned** — decided, for the
+reasons given under Target architecture above. Both are fixed at creation and
+cannot be revisited afterwards, which is why neither is left to be discovered
+later. Not provisionally: Microsoft is explicit that *"Once a
 table is created, the ownership type can't be changed"*, and again — *"After you
 create a custom table, you can't change the ownership… If you later determine
 that your custom table must be of a different type, you need to delete it and
