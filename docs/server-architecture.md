@@ -56,9 +56,11 @@ table, not a precedent for this one.
 | | Table | Ownership |
 |---|---|---|
 | **Current v1.1.0** | legacy-derived `ayonto_mention` | **UserOwned** |
-| **Target** | product-owned `ayonto_mentionevent` | **Organization-owned** | The currently packaged table came from the legacy product and was
-reused to prove that a database-carrying package imports and coexists; that
-question is answered, and reusing another product's table is not the target.
+| **Target** | product-owned `ayonto_mentionevent` | **Organization-owned** |
+
+The currently packaged table came from the legacy product and was reused to prove
+that a database-carrying package imports and coexists; that question is answered,
+and reusing another product's table is not the target.
 
 ### Two version numbers, and they are not the same number
 
