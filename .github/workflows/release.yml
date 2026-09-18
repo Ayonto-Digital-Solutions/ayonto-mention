@@ -29,8 +29,8 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      version:
-        description: "Version to build, for example 1.0.0"
+      solution_version:
+        description: "Solution version to build, four parts, for example 1.1.0.1"
         required: true
         type: string
   push:
@@ -63,7 +63,8 @@ jobs:
     name: Build and check the solution packages
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.version.outputs.version }}
+      solution-version: ${{ steps.version.outputs.solution-version }}
+      control-version: ${{ steps.version.outputs.control-version }}
 
     steps:
       - uses: actions/checkout@v7
@@ -96,44 +97,96 @@ jobs:
           echo "::error::a release candidate is built from main; this run is on ${GITHUB_REF}"
           exit 1
 
+      # Two versions, worked out separately, because they are two different
+      # things.
+      #
+      # A Dataverse solution version has four parts — major.minor.build.revision
+      # — and the platform compares it to decide whether an import is an update
+      # at all. The code component inside that solution carries a version of its
+      # own, and the component framework manifest defines that one as Semantic
+      # Versioning: three parts.
+      #
+      #   https://learn.microsoft.com/power-apps/maker/data-platform/update-solutions
+      #   https://learn.microsoft.com/power-apps/developer/component-framework/manifest-schema-reference/control
+      #
+      # Neither is computed from the other. This used to name one three-part
+      # number and append `.0` to reach a solution version, which held only while
+      # the two moved together — and they do not. The solution can need a
+      # fourth-part revision on its own, for a table or a step or a security
+      # role, with the control untouched.
+      #
+      # Where each value comes from is not the same as who decides it. Both
+      # versions are declared in the repository; a tag and a dispatch input only
+      # *name* a release, and the next step is what holds them to the committed
+      # manifest. A tag pushed at a commit whose manifest still says something
+      # else stops the build rather than getting stamped into it.
+      #
       # One branch per event, spelled out. A fallback chain would quietly pick
-      # something for an event nobody thought about, and the version is the name
-      # the package goes out under.
-      - name: Work out the version
+      # something for an event nobody thought about, and the solution version is
+      # the name the package goes out under.
+      - name: Work out the versions
         id: version
         env:
-          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_SOLUTION_VERSION: ${{ inputs.solution_version }}
         run: |
           case "${GITHUB_EVENT_NAME}" in
             workflow_dispatch)
-              version="${INPUT_VERSION}" ;;
+              solution_version="${INPUT_SOLUTION_VERSION}" ;;
             push)
-              version="${GITHUB_REF_NAME#v}" ;;
+              # A tag names the release, and a release is named by its solution
+              # version: v1.1.0.1, not v1.1.0. A three-part tag is not padded
+              # into a solution version — it fails the shape check below, and a
+              # four-part tag that disagrees with the committed manifest fails
+              # the next step.
+              solution_version="${GITHUB_REF_NAME#v}" ;;
             pull_request)
               # What the repository itself says it is: a pull request builds the
-              # packages to prove they build, not to name a release.
-              version=$(node -p "require('./package.json').version") ;;
+              # packages to prove they build, not to name a release. This is the
+              # same file every other event is checked against.
+              solution_version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' \
+                "${SOLUTION_DIR}/src/Other/Solution.xml" | head -1) ;;
             *)
               echo "::error::${GITHUB_EVENT_NAME} does not say what version to build"
               exit 1 ;;
           esac
-          case "${version}" in
-            [0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "::error::expected a version like 1.0.0, got '${version}'"; exit 1 ;;
-          esac
-          if [ "${version}" != "$(printf '%s' "${version}" | tr -cd '0-9.')" ]; then
-            echo "::error::a version is digits and dots, got '${version}'"
+
+          # The control version is never named from outside, whatever the event.
+          # It is committed, in three files that have to agree, and the next step
+          # is what proves they do.
+          control_version=$(node -p "require('./package.json').version")
+
+          # Shapes checked before either value reaches a filename or a manifest.
+          # Anchored and digits only: a version that merely begins with the right
+          # shape is not the right shape.
+          if ! printf '%s' "${solution_version}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::expected a four-part solution version like 1.1.0.1, got '${solution_version}'"
             exit 1
           fi
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "Building ${SOLUTION_NAME} ${version}"
+          if ! printf '%s' "${control_version}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::expected a three-part control version like 1.1.0, got '${control_version}'"
+            exit 1
+          fi
 
-      # What the repository says it is, against what the release says it is. A
-      # release never edits the version it ships: raising it is a pull request.
+          echo "solution-version=${solution_version}" >> "$GITHUB_OUTPUT"
+          echo "control-version=${control_version}" >> "$GITHUB_OUTPUT"
+          echo "Building ${SOLUTION_NAME} solution ${solution_version}, control ${control_version}"
+
+      # What the repository says it is, against what the release says it is —
+      # and the repository is what counts. Four declarations are read here: the
+      # solution version in the committed manifest, and the control version in
+      # the three files that carry it.
+      #
+      # This is the step that makes a tag an assertion rather than a decision. A
+      # release ships what was reviewed and merged; raising either version is a
+      # pull request, not a number typed into a form.
       - name: Check the version declarations agree
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: python3 .github/scripts/check-release-version.py "${VERSION}"
+          SOLUTION_VERSION: ${{ steps.version.outputs.solution-version }}
+          CONTROL_VERSION: ${{ steps.version.outputs.control-version }}
+        run: |
+          python3 .github/scripts/check-release-version.py \
+            --solution-version "${SOLUTION_VERSION}" \
+            --control-version "${CONTROL_VERSION}"
 
       # What this run was built from, said plainly and in one place.
       #
@@ -152,17 +205,19 @@ jobs:
       - name: Record what this build came from
         id: provenance
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          SOLUTION_VERSION: ${{ steps.version.outputs.solution-version }}
+          CONTROL_VERSION: ${{ steps.version.outputs.control-version }}
         run: |
           commit=$(git rev-parse HEAD)
           echo "commit=${commit}" >> "$GITHUB_OUTPUT"
           {
-            echo "### ${SOLUTION_NAME} ${VERSION}"
+            echo "### ${SOLUTION_NAME} ${SOLUTION_VERSION}"
             echo
             echo "| | |"
             echo "|---|---|"
             echo "| Source commit | \`${commit}\` |"
-            echo "| Version | ${VERSION} |"
+            echo "| Solution version | ${SOLUTION_VERSION} |"
+            echo "| Control version | ${CONTROL_VERSION} |"
             echo "| Event | ${GITHUB_EVENT_NAME} |"
             echo "| Run | ${GITHUB_RUN_ID} |"
             echo
@@ -173,7 +228,7 @@ jobs:
               echo "moved on since."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "source commit ${commit}, version ${VERSION}, event ${GITHUB_EVENT_NAME}"
+          echo "source commit ${commit}, solution ${SOLUTION_VERSION}, control ${CONTROL_VERSION}, event ${GITHUB_EVENT_NAME}"
 
       - name: Install the Power Platform CLI
         run: |
@@ -259,15 +314,24 @@ jobs:
       - name: Check the solution source
         run: python3 .github/scripts/check-solution-source.py
 
-      # The one value a release decides. Everything else about the solution —
-      # unique name, publisher, packaging, and the table itself — is read from
-      # the repository rather than generated here.
+      # Writes the solution version into the manifest that is about to be packed.
+      #
+      # It cannot introduce one. The step above has already proved that this is
+      # the version the committed manifest declares, so this can only write back
+      # what is already there. It stays because the manifest is what
+      # SolutionPackager reads, and a release should put the version it was
+      # checked against into that file explicitly rather than trusting that
+      # nothing between here and the packer touched it.
+      #
+      # Everything else about the solution — unique name, publisher, packaging,
+      # and the table itself — is read from the repository rather than generated
+      # here.
       - name: Stamp the solution version
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          SOLUTION_VERSION: ${{ steps.version.outputs.solution-version }}
         run: |
           python3 .github/scripts/stamp-solution-version.py \
-            "${SOLUTION_DIR}/src/Other/Solution.xml" --version "${VERSION}.0"
+            "${SOLUTION_DIR}/src/Other/Solution.xml" --version "${SOLUTION_VERSION}"
 
       # SolutionPackager reports a component it could not take as a line in its
       # log and still exits zero. The log is read, and the packages themselves are
@@ -284,7 +348,7 @@ jobs:
 
       - name: Collect the packages
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          SOLUTION_VERSION: ${{ steps.version.outputs.solution-version }}
         run: |
           mkdir -p dist
           built="${SOLUTION_DIR}/bin/Release"
@@ -297,26 +361,27 @@ jobs:
               exit 1
             fi
           done
-          cp "${managed}"   "dist/${SOLUTION_NAME}_${VERSION}_managed.zip"
-          cp "${unmanaged}" "dist/${SOLUTION_NAME}_${VERSION}.zip"
+          cp "${managed}"   "dist/${SOLUTION_NAME}_${SOLUTION_VERSION}_managed.zip"
+          cp "${unmanaged}" "dist/${SOLUTION_NAME}_${SOLUTION_VERSION}.zip"
           ls -l dist
           sha256sum dist/*.zip
 
       # The packages are opened and read before anyone is told what they contain.
       - name: Check what was built
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          SOLUTION_VERSION: ${{ steps.version.outputs.solution-version }}
+          CONTROL_VERSION: ${{ steps.version.outputs.control-version }}
         run: |
           python3 .github/scripts/check-release-package.py \
-            "dist/${SOLUTION_NAME}_${VERSION}_managed.zip" \
-            --version "${VERSION}.0" --control-version "${VERSION}" --managed
+            "dist/${SOLUTION_NAME}_${SOLUTION_VERSION}_managed.zip" \
+            --version "${SOLUTION_VERSION}" --control-version "${CONTROL_VERSION}" --managed
           python3 .github/scripts/check-release-package.py \
-            "dist/${SOLUTION_NAME}_${VERSION}.zip" \
-            --version "${VERSION}.0" --control-version "${VERSION}" --unmanaged
+            "dist/${SOLUTION_NAME}_${SOLUTION_VERSION}.zip" \
+            --version "${SOLUTION_VERSION}" --control-version "${CONTROL_VERSION}" --unmanaged
 
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.SOLUTION_NAME }}-${{ steps.version.outputs.version }}
+          name: ${{ env.SOLUTION_NAME }}-${{ steps.version.outputs.solution-version }}
           path: dist/*.zip
           if-no-files-found: error
 
@@ -341,7 +406,7 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: ${{ env.SOLUTION_NAME }}-${{ needs.package.outputs.version }}
+          name: ${{ env.SOLUTION_NAME }}-${{ needs.package.outputs.solution-version }}
           path: dist
 
       # A release is cut from a signed annotated tag on main, or not at all.
@@ -397,7 +462,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
-          VERSION: ${{ needs.package.outputs.version }}
+          SOLUTION_VERSION: ${{ needs.package.outputs.solution-version }}
+          CONTROL_VERSION: ${{ needs.package.outputs.control-version }}
         run: |
           ls -l dist
           sha256sum dist/*.zip
@@ -418,12 +484,17 @@ jobs:
           that is not implemented yet. The table ships so that it can be imported
           and validated in a real environment ahead of that work.
 
+          Solution version \`${SOLUTION_VERSION}\`, code component version
+          \`${CONTROL_VERSION}\`. The two are versioned separately: a Dataverse
+          solution version has four parts, and the component framework manifest
+          uses Semantic Versioning.
+
           Two Dataverse solution packages are attached:
 
-          * \`${SOLUTION_NAME}_${VERSION}_managed.zip\` — for environments that are
-            not where this control is developed.
-          * \`${SOLUTION_NAME}_${VERSION}.zip\` — unmanaged, for a development
-            environment or to inspect the package.
+          * \`${SOLUTION_NAME}_${SOLUTION_VERSION}_managed.zip\` — for environments
+            that are not where this control is developed.
+          * \`${SOLUTION_NAME}_${SOLUTION_VERSION}.zip\` — unmanaged, for a
+            development environment or to inspect the package.
           NOTES
           gh release create "${TAG}" dist/*.zip \
             --verify-tag \

@@ -53,3 +53,10 @@ jobs:
       # them too late. No dependencies, so it costs a second.
       - name: Check the solution source
         run: python3 .github/scripts/check-solution-source.py
+
+      # The version contract: a four-part solution version, a three-part control
+      # version, and nothing deriving one from the other. These run here rather
+      # than only in the release workflow, because the release workflow is the
+      # thing they are checking.
+      - name: Check the version contract
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
