@@ -111,6 +111,9 @@ $script:Table = [ordered]@{
     Description         = 'One mention episode for one recipient, with the notification configuration that applied when it was created.'
     OwnershipType       = 'OrganizationOwned'
     PrimaryNameSchema   = 'ayonto_Name'
+    #: The logical name, lower-cased. PrimaryNameAttribute is part of the table
+    #: definition, not something Dataverse infers from IsPrimaryName alone.
+    PrimaryNameLogical  = 'ayonto_name'
     PrimaryNameLength   = 200
 }
 
@@ -345,18 +348,92 @@ function Get-ExistingTable {
         -Path "EntityDefinitions(LogicalName='$($script:Table.LogicalName)')?`$select=$select"
 }
 
-function Get-ExistingColumns {
+function Get-BaseColumns {
+    # What every column has, whatever its type. Enough to find columns that
+    # should not be there at all, including lookups.
     $select = 'LogicalName,SchemaName,AttributeType,IsCustomAttribute'
     $response = Invoke-Dataverse -Method GET `
         -Path "EntityDefinitions(LogicalName='$($script:Table.LogicalName)')/Attributes?`$select=$select"
     return $response.value
 }
 
+function Get-TypedColumns {
+    <#
+        MaxLength, DefaultValue, MinValue and MaxValue are not on the base
+        AttributeMetadata type, so a query of Attributes alone cannot see them —
+        which is how a Text(64) could pass for a Text(36). Microsoft documents
+        the remedy: "To retrieve the properties of a specific type of attribute,
+        cast the Attributes collection-valued navigation property to the type
+        you want."
+        https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query-metadata-web-api
+    #>
+    $casts = @(
+        @{ Kind = 'String';  Type = 'StringAttributeMetadata';  Select = 'LogicalName,MaxLength,RequiredLevel,IsPrimaryName' }
+        @{ Kind = 'Memo';    Type = 'MemoAttributeMetadata';    Select = 'LogicalName,MaxLength,RequiredLevel' }
+        @{ Kind = 'Integer'; Type = 'IntegerAttributeMetadata'; Select = 'LogicalName,MinValue,MaxValue,RequiredLevel' }
+        @{ Kind = 'Boolean'; Type = 'BooleanAttributeMetadata'; Select = 'LogicalName,DefaultValue,RequiredLevel' }
+    )
+
+    $found = @{}
+    foreach ($cast in $casts) {
+        $path = "EntityDefinitions(LogicalName='$($script:Table.LogicalName)')/Attributes/" +
+                "Microsoft.Dynamics.CRM.$($cast.Type)?`$select=$($cast.Select)"
+        $response = Invoke-Dataverse -Method GET -Path $path
+        foreach ($column in $response.value) {
+            $found[$column.LogicalName] = [pscustomobject]@{
+                Kind     = $cast.Kind
+                Metadata = $column
+            }
+        }
+    }
+    return $found
+}
+
+function Get-Property {
+    param($Object, [string] $Name)
+    if ($null -eq $Object) { return $null }
+    if ($Object.PSObject.Properties.Name -notcontains $Name) { return $null }
+    return $Object.$Name
+}
+
+function Get-RequiredLevelValue {
+    param($Metadata)
+    # RequiredLevel is an AttributeRequiredLevelManagedProperty; the level is in
+    # its Value property, not on the attribute itself.
+    $level = Get-Property -Object $Metadata -Name 'RequiredLevel'
+    return (Get-Property -Object $level -Name 'Value')
+}
+
+function Get-ExpectedColumns {
+    # The primary name is part of the contract like everything else, so it is
+    # verified the same way rather than trusted because the create call set it.
+    $expected = @(
+        [pscustomobject]@{
+            Schema      = $script:Table.PrimaryNameSchema
+            Kind        = 'String'
+            Length      = $script:Table.PrimaryNameLength
+            Required    = $true
+            PrimaryName = $true
+        }
+    )
+    foreach ($column in $script:Columns) {
+        $expected += [pscustomobject]@{
+            Schema      = $column.Schema
+            Kind        = $column.Kind
+            Length      = $(if ($column.PSObject.Properties.Name -contains 'Length') { $column.Length } else { $null })
+            Required    = $column.Required
+            PrimaryName = $false
+        }
+    }
+    return $expected
+}
+
 function Compare-Against-Contract {
-    param($Existing, $ExistingColumns)
+    param($Existing, $BaseColumns, $TypedColumns)
 
     $problems = [System.Collections.Generic.List[string]]::new()
 
+    # --- the table itself ---------------------------------------------------
     if ($Existing.OwnershipType -ne $script:Table.OwnershipType) {
         $problems.Add("ownership is '$($Existing.OwnershipType)', expected '$($script:Table.OwnershipType)' (ownership cannot be changed after creation)")
     }
@@ -366,39 +443,73 @@ function Compare-Against-Contract {
     if ($Existing.SchemaName -ne $script:Table.SchemaName) {
         $problems.Add("schema name is '$($Existing.SchemaName)', expected '$($script:Table.SchemaName)'")
     }
+    $primaryName = Get-Property -Object $Existing -Name 'PrimaryNameAttribute'
+    if ($primaryName -ne $script:Table.PrimaryNameLogical) {
+        $problems.Add("primary name attribute is '$primaryName', expected '$($script:Table.PrimaryNameLogical)'")
+    }
 
-    $byLogical = @{}
-    foreach ($column in $ExistingColumns) { $byLogical[$column.LogicalName] = $column }
-
-    foreach ($column in $script:Columns) {
+    # --- every declared column, down to its shape ---------------------------
+    foreach ($column in (Get-ExpectedColumns)) {
         $logical = $column.Schema.ToLowerInvariant()
-        if (-not $byLogical.ContainsKey($logical)) {
-            $problems.Add("column '$($column.Schema)' is missing")
+        if (-not $TypedColumns.ContainsKey($logical)) {
+            $problems.Add("column '$($column.Schema)' is missing, or is not a $($column.Kind) column")
             continue
         }
-        $expectedType = switch ($column.Kind) {
-            'String'  { 'String' }
-            'Memo'    { 'Memo' }
-            'Integer' { 'Integer' }
-            'Boolean' { 'Boolean' }
+
+        $found = $TypedColumns[$logical]
+        if ($found.Kind -ne $column.Kind) {
+            $problems.Add("column '$($column.Schema)' is $($found.Kind), expected $($column.Kind) (a column type cannot be changed after creation)")
+            continue
         }
-        $found = $byLogical[$logical].AttributeType
-        if ($found -ne $expectedType) {
-            $problems.Add("column '$($column.Schema)' is $found, expected $expectedType (a column type cannot be changed after creation)")
+
+        $metadata = $found.Metadata
+        $wantedLevel = $(if ($column.Required) { 'ApplicationRequired' } else { 'None' })
+        $foundLevel = Get-RequiredLevelValue -Metadata $metadata
+        if ($foundLevel -ne $wantedLevel) {
+            $problems.Add("column '$($column.Schema)' is $foundLevel, expected $wantedLevel")
+        }
+
+        switch ($column.Kind) {
+            { $_ -in @('String', 'Memo') } {
+                $length = Get-Property -Object $metadata -Name 'MaxLength'
+                if ($length -ne $column.Length) {
+                    $problems.Add("column '$($column.Schema)' has max length $length, expected $($column.Length)")
+                }
+            }
+            'Integer' {
+                $minimum = Get-Property -Object $metadata -Name 'MinValue'
+                $maximum = Get-Property -Object $metadata -Name 'MaxValue'
+                if ($minimum -ne 1) { $problems.Add("column '$($column.Schema)' has minimum $minimum, expected 1") }
+                if ($maximum -ne 2147483647) { $problems.Add("column '$($column.Schema)' has maximum $maximum, expected 2147483647") }
+            }
+            'Boolean' {
+                $default = Get-Property -Object $metadata -Name 'DefaultValue'
+                if ($default -ne $false) {
+                    $problems.Add("column '$($column.Schema)' defaults to $default, expected False — a channel nobody configured must not be on")
+                }
+            }
+        }
+
+        if ($column.Kind -eq 'String') {
+            $isPrimary = [bool] (Get-Property -Object $metadata -Name 'IsPrimaryName')
+            if ($isPrimary -ne $column.PrimaryName) {
+                $problems.Add("column '$($column.Schema)' has IsPrimaryName $isPrimary, expected $($column.PrimaryName)")
+            }
         }
     }
 
+    # --- and nothing else ---------------------------------------------------
     # A lookup on this table would tie the product solution to a host table or
     # to systemuser, which is exactly what the architecture forbids.
-    $lookups = $ExistingColumns |
+    $lookups = $BaseColumns |
         Where-Object { $_.IsCustomAttribute -and $_.AttributeType -in @('Lookup', 'Customer', 'Owner') }
     foreach ($lookup in $lookups) {
         $problems.Add("custom lookup column '$($lookup.SchemaName)' exists; this table must carry no lookups")
     }
 
-    $expected = $script:Columns.Schema.ToLowerInvariant()
-    $unexpected = $ExistingColumns |
-        Where-Object { $_.IsCustomAttribute -and $_.LogicalName -notin $expected -and $_.LogicalName -ne $script:Table.PrimaryNameSchema.ToLowerInvariant() }
+    $declared = @((Get-ExpectedColumns).Schema | ForEach-Object { $_.ToLowerInvariant() })
+    $unexpected = $BaseColumns |
+        Where-Object { $_.IsCustomAttribute -and $_.LogicalName -notin $declared }
     foreach ($extra in $unexpected) {
         $problems.Add("unexpected custom column '$($extra.SchemaName)'")
     }
@@ -442,6 +553,7 @@ function New-MentionEventTable {
     $body = @{
         '@odata.type'      = 'Microsoft.Dynamics.CRM.EntityMetadata'
         SchemaName         = $script:Table.SchemaName
+        PrimaryNameAttribute = $script:Table.PrimaryNameLogical
         DisplayName        = New-Label -Text $script:Table.DisplayName
         DisplayCollectionName = New-Label -Text $script:Table.DisplayCollection
         Description        = New-Label -Text $script:Table.Description
@@ -496,8 +608,9 @@ else {
     Write-Step "the table already exists (managed: $($existing.IsManaged))"
 }
 
-$columns = Get-ExistingColumns
-$problems = Compare-Against-Contract -Existing $existing -ExistingColumns $columns
+$baseColumns = Get-BaseColumns
+$typedColumns = Get-TypedColumns
+$problems = Compare-Against-Contract -Existing $existing -BaseColumns $baseColumns -TypedColumns $typedColumns
 
 if ($problems.Count -gt 0) {
     Write-Host ''
@@ -507,11 +620,13 @@ if ($problems.Count -gt 0) {
     Stop-Closed 'failing closed. Nothing was deleted, recreated or altered. Resolve this by hand and run again.'
 }
 
-$custom = @($columns | Where-Object { $_.IsCustomAttribute }).Count
+$custom = @($baseColumns | Where-Object { $_.IsCustomAttribute }).Count
 Write-Host ''
 Write-Host "$($script:Table.LogicalName): $($existing.OwnershipType), $custom custom column(s), set $($existing.EntitySetName)"
 Write-Host 'contract holds.'
 Write-Host ''
 Write-Host 'Next, export and unpack the unmanaged solution, and bring the result back to the repository:'
-Write-Host "  pac solution export --name $SolutionUniqueName --path ./$SolutionUniqueName.zip --managed false --overwrite"
-Write-Host "  pac solution unpack --zipfile ./$SolutionUniqueName.zip --folder ./src --packagetype Unmanaged --allowDelete false"
+# --managed and --allowDelete are switches that take no value. An unmanaged
+# export omits --managed entirely, and allowDelete is already false by default.
+Write-Host "  pac solution export --name $SolutionUniqueName --path ./$SolutionUniqueName.zip --overwrite"
+Write-Host "  pac solution unpack --zipfile ./$SolutionUniqueName.zip --folder ./src --packagetype Unmanaged"
