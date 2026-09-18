@@ -153,6 +153,78 @@
   <data name="MinRows_Desc_Key" xml:space="preserve">
     <value>Smallest height of the field, counted in rows of text, used because a model-driven form does not tell a code component how tall it made the field. Anything below 1 or above 30 is taken as 1 or 30; if nothing usable is set, 3 rows are used.</value>
   </data>
+  <data name="EmailEnabled_Display_Key" xml:space="preserve">
+    <value>Email notifications</value>
+  </data>
+  <data name="EmailEnabled_Desc_Key" xml:space="preserve">
+    <value>Enable email notifications for mentions in this field. Off unless you turn it on.</value>
+  </data>
+  <data name="EmailSubject_Display_Key" xml:space="preserve">
+    <value>Email subject</value>
+  </data>
+  <data name="EmailSubject_Desc_Key" xml:space="preserve">
+    <value>Subject used for email notifications created from mentions in this field.</value>
+  </data>
+  <data name="EmailBody_Display_Key" xml:space="preserve">
+    <value>Email message</value>
+  </data>
+  <data name="EmailBody_Desc_Key" xml:space="preserve">
+    <value>Message body used for email notifications created from mentions in this field.</value>
+  </data>
+  <data name="EmailLinkText_Display_Key" xml:space="preserve">
+    <value>Email link text</value>
+  </data>
+  <data name="EmailLinkText_Desc_Key" xml:space="preserve">
+    <value>Text of the link back to the record, used in email notifications created from mentions in this field.</value>
+  </data>
+  <data name="TeamsEnabled_Display_Key" xml:space="preserve">
+    <value>Teams notifications</value>
+  </data>
+  <data name="TeamsEnabled_Desc_Key" xml:space="preserve">
+    <value>Enable Teams notifications for mentions in this field. Off unless you turn it on.</value>
+  </data>
+  <data name="TeamsTitle_Display_Key" xml:space="preserve">
+    <value>Teams title</value>
+  </data>
+  <data name="TeamsTitle_Desc_Key" xml:space="preserve">
+    <value>Title used for Teams notifications created from mentions in this field.</value>
+  </data>
+  <data name="TeamsBody_Display_Key" xml:space="preserve">
+    <value>Teams message</value>
+  </data>
+  <data name="TeamsBody_Desc_Key" xml:space="preserve">
+    <value>Message body used for Teams notifications created from mentions in this field.</value>
+  </data>
+  <data name="TeamsLinkText_Display_Key" xml:space="preserve">
+    <value>Teams link text</value>
+  </data>
+  <data name="TeamsLinkText_Desc_Key" xml:space="preserve">
+    <value>Text of the link back to the record, used in Teams notifications created from mentions in this field.</value>
+  </data>
+  <data name="InAppEnabled_Display_Key" xml:space="preserve">
+    <value>In-app notifications</value>
+  </data>
+  <data name="InAppEnabled_Desc_Key" xml:space="preserve">
+    <value>Enable in-app notifications for mentions in this field. Off unless you turn it on.</value>
+  </data>
+  <data name="InAppTitle_Display_Key" xml:space="preserve">
+    <value>In-app title</value>
+  </data>
+  <data name="InAppTitle_Desc_Key" xml:space="preserve">
+    <value>Title used for in-app notifications created from mentions in this field.</value>
+  </data>
+  <data name="InAppBody_Display_Key" xml:space="preserve">
+    <value>In-app message</value>
+  </data>
+  <data name="InAppBody_Desc_Key" xml:space="preserve">
+    <value>Message body used for in-app notifications created from mentions in this field.</value>
+  </data>
+  <data name="InAppLinkText_Display_Key" xml:space="preserve">
+    <value>In-app link text</value>
+  </data>
+  <data name="InAppLinkText_Desc_Key" xml:space="preserve">
+    <value>Text of the link back to the record, used in in-app notifications created from mentions in this field.</value>
+  </data>
   <data name="Editor_Placeholder" xml:space="preserve">
     <value>Type @ to mention someone</value>
   </data>
