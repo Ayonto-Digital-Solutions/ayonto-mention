@@ -33,6 +33,9 @@ const VERSION_DECLARATIONS = {
     "pcf/package.json": path.join(__dirname, "..", "package.json"),
 };
 
+/** npm's copy of the same number, written by npm and edited by nobody. */
+const LOCK_FILE = path.join(__dirname, "..", "package-lock.json");
+
 interface ExpectedProperty {
     readonly name: string;
     readonly ofType: string;
@@ -278,5 +281,25 @@ describe("the version this adds up to", () => {
             const version = (declared as { version?: unknown }).version;
             expect({ where, version }).toEqual({ where, version: CONTROL_VERSION });
         }
+    });
+
+    it("says it in the lock file too, in both places npm writes it", () => {
+        // Raising the version in package.json does not touch the lock file, and
+        // `npm ci` installs from the lock file without rewriting it — so a stale
+        // number here survives the build, the release checker and every other
+        // check, because none of them reads it. It is generated project
+        // metadata rather than a version authority, which is exactly why nothing
+        // else notices when it drifts.
+        const lock: unknown = JSON.parse(fs.readFileSync(LOCK_FILE, "utf8"));
+        const { version, packages } = lock as {
+            version?: unknown;
+            packages?: Record<string, { version?: unknown } | undefined>;
+        };
+
+        expect({ where: "top level", version }).toEqual({ where: "top level", version: CONTROL_VERSION });
+        expect({ where: 'packages[""]', version: packages?.[""]?.version }).toEqual({
+            where: 'packages[""]',
+            version: CONTROL_VERSION,
+        });
     });
 });
