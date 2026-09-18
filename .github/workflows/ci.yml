@@ -54,6 +54,26 @@ jobs:
       - name: Check the solution source
         run: python3 .github/scripts/check-solution-source.py
 
+      # The gapped-device bootstrap runs where nothing in this workflow can
+      # reach it, so a syntax error in it costs a round trip to a real
+      # environment to discover. Parsing is not running, but it is the half of
+      # the problem that can be checked from here. PowerShell is preinstalled on
+      # the runner.
+      - name: Parse the Dataverse bootstrap script
+        shell: pwsh
+        run: |
+          $script = "tools/powerplatform/Initialize-MentionEventSchema.ps1"
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $script), [ref]$null, [ref]$errors)
+          if ($errors) {
+              foreach ($problem in $errors) {
+                  Write-Host "::error file=$script,line=$($problem.Extent.StartLineNumber)::$($problem.Message)"
+              }
+              exit 1
+          }
+          Write-Host "$script parses"
+
       # The version contract: a four-part solution version, a three-part control
       # version, and nothing deriving one from the other. These run here rather
       # than only in the release workflow, because the release workflow is the
