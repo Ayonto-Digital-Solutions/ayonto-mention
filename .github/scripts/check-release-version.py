@@ -23,12 +23,25 @@ They are related by release, not by arithmetic. A solution `1.1.0.1` shipping a
 control `1.1.0` is the ordinary case rather than a mistake, and nothing here
 compares them.
 
-What is compared is the repository against itself. Three files declare the
-control version, and a package built while they disagree is not the thing the
-release page says it is. Nothing here edits a committed file: a release is cut
-from what was reviewed and merged, and a build that quietly rewrites a version is
-a build that can publish something nobody read. Raising a version is a commit,
-and it belongs in a pull request.
+What is compared is the repository against itself, and against what the release
+claims to be. Four files declare a version, and every one of them is checked:
+
+    powerplatform/src/Other/Solution.xml      the solution version
+    package.json                             \\
+    pcf/package.json                          }  the control version
+    pcf/MentionControl/ControlManifest.Input.xml /
+
+Both versions are declared in the repository. Neither is invented outside it.
+
+That second point is the whole reason this script exists. A tag and a dispatch
+input *name* a release; they do not get to decide what version it carries. If
+`v1.1.0.1` is pushed at a commit whose manifest still says `1.1.0.0`, the
+release would ship a solution version nobody reviewed — the build would stamp the
+tag's number into the manifest on its way past and publish it. So the tag is
+checked against the committed manifest and the build stops when they differ.
+
+Nothing here edits a committed file. Raising either version is a commit, and it
+belongs in a pull request.
 """
 
 from __future__ import annotations
@@ -45,6 +58,8 @@ from pathlib import Path
 SOLUTION_VERSION = re.compile(r"\d+\.\d+\.\d+\.\d+")
 CONTROL_VERSION = re.compile(r"\d+\.\d+\.\d+")
 
+SOLUTION_MANIFEST = Path("powerplatform/src/Other/Solution.xml")
+SOLUTION_VERSION_ELEMENT = re.compile(r"<Version>([^<]*)</Version>")
 CONTROL_VERSION_ATTRIBUTE = re.compile(r'<control\b[^>]*?\bversion="([^"]*)"')
 
 
@@ -59,12 +74,19 @@ def read_control_version(path: Path) -> str:
     return found.group(1)
 
 
+def read_solution_version(path: Path) -> str:
+    found = SOLUTION_VERSION_ELEMENT.search(path.read_text(encoding="utf-8"))
+    if found is None:
+        raise ValueError(f"no <Version> element in {path}")
+    return found.group(1)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--solution-version",
         required=True,
-        help="Dataverse solution version, four parts, e.g. 1.1.0.1",
+        help="Dataverse solution version being released, four parts, e.g. 1.1.0.1",
     )
     parser.add_argument(
         "--control-version",
@@ -94,7 +116,8 @@ def main() -> int:
     # than a version nobody checked.
     root = Path(arguments.root)
     try:
-        declared = {
+        committed_solution = read_solution_version(root / SOLUTION_MANIFEST)
+        declared_control = {
             "package.json": read_package_version(root / "package.json"),
             "pcf/package.json": read_package_version(root / "pcf" / "package.json"),
             "pcf/MentionControl/ControlManifest.Input.xml": read_control_version(
@@ -105,29 +128,38 @@ def main() -> int:
         print(f"::error::cannot read a version declaration: {problem}")
         return 1
 
-    wrong = {
-        where: found
-        for where, found in declared.items()
-        if found != arguments.control_version
-    }
-    if wrong:
-        for where, found in wrong.items():
-            print(
+    # Everything wrong at once, rather than one thing per run: whoever reads this
+    # log is trying to find out what the repository actually says.
+    problems = []
+    if committed_solution != arguments.solution_version:
+        problems.append(
+            f"::error::{SOLUTION_MANIFEST.as_posix()} declares solution version "
+            f"{committed_solution}, but this release is being built as "
+            f"{arguments.solution_version}"
+        )
+    for where, found in declared_control.items():
+        if found != arguments.control_version:
+            problems.append(
                 f"::error::{where} says {found}, but the control version being "
                 f"released is {arguments.control_version}"
             )
+
+    if problems:
+        for problem in problems:
+            print(problem)
         print(
-            "::error::raise the version in a pull request first; a release does not "
-            "rewrite what it ships"
+            "::error::a tag or a dispatch input names a release; it does not decide "
+            "what version that release carries. Raise the version in a pull request "
+            "first — a release does not rewrite what it ships"
         )
         return 1
 
-    for where, found in declared.items():
+    print(f"{SOLUTION_MANIFEST.as_posix()}: {committed_solution}")
+    for where, found in declared_control.items():
         print(f"{where}: {found}")
-    print(f"all control version declarations agree on {arguments.control_version}")
     print(
-        f"solution version {arguments.solution_version} is the version the packages "
-        f"are stamped and named with"
+        f"solution {arguments.solution_version} and control "
+        f"{arguments.control_version} are both declared in the repository"
     )
     return 0
 

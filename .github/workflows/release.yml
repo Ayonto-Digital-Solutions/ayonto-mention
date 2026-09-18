@@ -115,6 +115,12 @@ jobs:
       # fourth-part revision on its own, for a table or a step or a security
       # role, with the control untouched.
       #
+      # Where each value comes from is not the same as who decides it. Both
+      # versions are declared in the repository; a tag and a dispatch input only
+      # *name* a release, and the next step is what holds them to the committed
+      # manifest. A tag pushed at a commit whose manifest still says something
+      # else stops the build rather than getting stamped into it.
+      #
       # One branch per event, spelled out. A fallback chain would quietly pick
       # something for an event nobody thought about, and the solution version is
       # the name the package goes out under.
@@ -129,13 +135,14 @@ jobs:
             push)
               # A tag names the release, and a release is named by its solution
               # version: v1.1.0.1, not v1.1.0. A three-part tag is not padded
-              # into a solution version — it fails the shape check below.
+              # into a solution version — it fails the shape check below, and a
+              # four-part tag that disagrees with the committed manifest fails
+              # the next step.
               solution_version="${GITHUB_REF_NAME#v}" ;;
             pull_request)
               # What the repository itself says it is: a pull request builds the
-              # packages to prove they build, not to name a release. The solution
-              # version is read from the manifest that ships it, which is also
-              # the file the stamp step writes.
+              # packages to prove they build, not to name a release. This is the
+              # same file every other event is checked against.
               solution_version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' \
                 "${SOLUTION_DIR}/src/Other/Solution.xml" | head -1) ;;
             *)
@@ -164,8 +171,14 @@ jobs:
           echo "control-version=${control_version}" >> "$GITHUB_OUTPUT"
           echo "Building ${SOLUTION_NAME} solution ${solution_version}, control ${control_version}"
 
-      # What the repository says it is, against what the release says it is. A
-      # release never edits the version it ships: raising it is a pull request.
+      # What the repository says it is, against what the release says it is —
+      # and the repository is what counts. Four declarations are read here: the
+      # solution version in the committed manifest, and the control version in
+      # the three files that carry it.
+      #
+      # This is the step that makes a tag an assertion rather than a decision. A
+      # release ships what was reviewed and merged; raising either version is a
+      # pull request, not a number typed into a form.
       - name: Check the version declarations agree
         env:
           SOLUTION_VERSION: ${{ steps.version.outputs.solution-version }}
@@ -301,9 +314,18 @@ jobs:
       - name: Check the solution source
         run: python3 .github/scripts/check-solution-source.py
 
-      # The one value a release decides. Everything else about the solution —
-      # unique name, publisher, packaging, and the table itself — is read from
-      # the repository rather than generated here.
+      # Writes the solution version into the manifest that is about to be packed.
+      #
+      # It cannot introduce one. The step above has already proved that this is
+      # the version the committed manifest declares, so this can only write back
+      # what is already there. It stays because the manifest is what
+      # SolutionPackager reads, and a release should put the version it was
+      # checked against into that file explicitly rather than trusting that
+      # nothing between here and the packer touched it.
+      #
+      # Everything else about the solution — unique name, publisher, packaging,
+      # and the table itself — is read from the repository rather than generated
+      # here.
       - name: Stamp the solution version
         env:
           SOLUTION_VERSION: ${{ steps.version.outputs.solution-version }}
