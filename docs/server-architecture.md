@@ -2,13 +2,19 @@
 
 How a mention becomes a notification, and which solution owns which part of that.
 
-**One part of this now exists, and it is worth being exact about which.** From
-v1.1.0 the solution package installs the central `ayonto_mention` table: the
-schema is shipped. Nothing writes to it — and the **Target architecture** section
-immediately below supersedes that table as the product ledger, without changing
-what the current release contains. The ingest step, the dispatcher and
-every delivery channel described below are still designed and unbuilt, so a
-mention still becomes a bound output on a business record and stops there.
+**Some of this now exists, and it is worth being exact about which.** From
+v1.1.0 the solution package installs the central `ayonto_mention` table, and the
+1.1.0.1 candidate adds the product's own `ayonto_mentionevent` alongside it: both
+schemas are in the package. Nothing writes to either. The ingest step, the
+dispatcher and every delivery channel described below are still designed and
+unbuilt, so a mention still becomes a bound output on a business record and stops
+there.
+
+**And a package is not an import.** The event table's source is derived rather
+than exported — see [`powerplatform/README.md`](../powerplatform/README.md) — and
+a solution that packs cleanly is not evidence that Dataverse accepts it. Until
+the managed import has run in a real environment, the event table exists in this
+repository and nowhere else.
 
 The rest is written down so that the implementation, when it happens, is the
 implementation of a decision rather than a rediscovery of one — and so that the
@@ -21,14 +27,18 @@ only commit boundary there is.
 
 ## Target architecture
 
-**Everything in this section is a target. None of it is built.** It is recorded
-so the shape is settled before anything is written against it, and so the places
-that are *not* settled are visible rather than assumed.
+**Most of this section is still a target, and the parts that are not are named
+where they appear.** What exists is the event table's solution source, in the
+1.1.0.1 candidate and not yet proven against a real import. The ingest, the
+authoritative configuration resolution, the dispatcher and every delivery channel
+are unbuilt. It is recorded so the shape is settled before anything is written
+against it, and so the places that are *not* settled are visible rather than
+assumed.
 
 ### The product event table
 
-The next planned product version introduces a table that belongs to this product
-and to nothing else:
+The 1.1.0.1 candidate introduces a table that belongs to this product and to
+nothing else:
 
 | | |
 |---|---|
@@ -421,14 +431,16 @@ implemented, and nothing here should be read as saying it is.
 | | Current release | Target |
 |---|---|---|
 | Code component | `Ayonto.AyontoMentionControl` | unchanged |
-| Product table | the legacy-derived table this release packages, **UserOwned** | `ayonto_mentionevent`, product-owned, **Organization-owned** |
+| Product table | the legacy-derived table, **UserOwned**, plus `ayonto_mentionevent`, **Organization-owned**, in the 1.1.0.1 package — not yet import-proven | `ayonto_mentionevent` alone, once the legacy table is retired |
 | Ingest | none | async PostOperation step, host-registered |
 | Dispatcher | none | one universal solution-aware flow, in its own central automation solution |
 | Delivery | none | e-mail · Teams · in-app, state per channel |
 | Maker notification config | none | set on the component, resolved server-side from published `FormXml` per `recordTable + sourceField` |
 | Companion metadata | required, host-owned, hand-configured | required today; hand-configuration to disappear later |
 
-The target version does not exist. Nothing below the code-component row is built.
+Only the product-table row has moved. Everything below it is unbuilt, and the
+event table's presence in a package is not the same claim as its presence in an
+environment.
 
 ## The shape of it
 
@@ -439,18 +451,19 @@ flowchart TD
     text --> save["Source-record save"]
     meta --> save
     save -.-> step["planned: async PostOperation step<br/>on the host source table"]
-    step -.-> ledger["target: ayonto_mentionevent<br/>(v1.1.0 packages the legacy-derived table)"]
+    step -.-> ledger["ayonto_mentionevent<br/>(packaged in 1.1.0.1, import unproven)"]
     ledger -.-> dispatcher["planned: dispatcher"]
     dispatcher -.-> channels["planned: e-mail · Teams · in-app"]
 ```
 
 Solid arrows exist today. Everything dotted is designed and unbuilt — with one
-exception: the ledger box is a table that v1.1.0 actually installs. The arrows
-into and out of it are not.
+exception: the ledger box is a table the package carries. The arrows into and out
+of it are not.
 
-**Packaged is not implemented.** The table being present in an environment says
-nothing about anything writing to or reading from it, and this document should
-not be read as if it did.
+**Packaged is not implemented, and packaged is not imported.** A table in a
+solution says nothing about anything writing to or reading from it, and this
+candidate's event table has not yet been accepted by a Dataverse environment at
+all. This document should not be read as if either had happened.
 
 ## Two solutions, and why
 
