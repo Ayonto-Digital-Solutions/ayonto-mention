@@ -54,25 +54,15 @@ jobs:
       - name: Check the solution source
         run: python3 .github/scripts/check-solution-source.py
 
-      # The gapped-device bootstrap runs where nothing in this workflow can
-      # reach it, so a syntax error in it costs a round trip to a real
-      # environment to discover. Parsing is not running, but it is the half of
-      # the problem that can be checked from here. PowerShell is preinstalled on
-      # the runner.
-      - name: Parse the Dataverse bootstrap script
-        shell: pwsh
+      # The event ledger's table source is derived from the real legacy export
+      # by a committed script. Running it must reproduce exactly what is
+      # committed: a hand edit to the generated XML, or a change to the
+      # derivation that nobody regenerated, shows up here rather than in a
+      # failed import.
+      - name: Check the derived table source is what the generator produces
         run: |
-          $script = "tools/powerplatform/Initialize-MentionEventSchema.ps1"
-          $errors = $null
-          [void][System.Management.Automation.Language.Parser]::ParseFile(
-              (Resolve-Path $script), [ref]$null, [ref]$errors)
-          if ($errors) {
-              foreach ($problem in $errors) {
-                  Write-Host "::error file=$script,line=$($problem.Extent.StartLineNumber)::$($problem.Message)"
-              }
-              exit 1
-          }
-          Write-Host "$script parses"
+          python3 tools/powerplatform/generate-mentionevent-entity.py
+          git diff --exit-code -- powerplatform/src/Entities/ayonto_MentionEvent/Entity.xml
 
       # The version contract: a four-part solution version, a three-part control
       # version, and nothing deriving one from the other. These run here rather

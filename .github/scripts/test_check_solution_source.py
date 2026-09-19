@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """What the solution-source checker refuses, proved against sources built here.
 
-The `ayonto_mentionevent` contract is written down before the table exists. That
-makes these tests the acceptance criteria for the export that is coming back from
-a real Dataverse environment: each one describes a way the exported schema could
-differ from what was asked for, and asserts the checker says so rather than
-letting it through.
+The `ayonto_mentionevent` table is derived rather than exported, so the checker is
+the only thing standing between a mistake in that derivation and a solution that
+ships it. Each test here describes a way the derived schema could be wrong and
+asserts the checker says so rather than letting it through.
 
 The fixtures are the smallest XML the checker reads, not copies of a real export.
 A test that asserted against a transcription of the real file would only prove the
@@ -255,12 +254,13 @@ class SourceCheckerTests(unittest.TestCase):
         self.assertEqual(code, 0, said)
         self.assertIn("ayonto_mentionevent: OrganizationOwned", said)
 
-    def test_accepts_the_ledger_being_absent_for_now(self) -> None:
-        # Until the real export lands there is nothing to check, and that is not
-        # a failure. The day the folder appears, the full contract applies.
+    def test_rejects_the_ledger_being_absent(self) -> None:
+        # The package exists to install it. A solution that builds cleanly and
+        # leaves the environment without the ledger is the failure this whole
+        # file is here to catch.
         code, said = run(build_source(self.root, with_ledger=False))
-        self.assertEqual(code, 0, said)
-        self.assertIn("not in the solution source yet", said)
+        self.assertEqual(code, 1)
+        self.assertIn("ayonto_mentionevent", said)
 
     def test_accepts_system_relationships_on_the_ledger(self) -> None:
         code, said = run(

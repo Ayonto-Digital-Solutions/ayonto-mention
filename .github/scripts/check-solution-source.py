@@ -24,12 +24,13 @@ There are two tables, and they are not the same kind of thing.
 contract is what the legacy solution exported, and nothing here is allowed to
 redesign it.
 
-`ayonto_mentionevent` is the product's own event ledger. Its contract is written
-here *before* the table exists, on purpose: the table has to be created in a real
-Dataverse environment and exported, and this is what decides whether what comes
-back is what was asked for. Until that export lands, the folder is absent and
-that is not an error — see EXPECTED_TABLES. Once it lands, `required` flips and
-the absence becomes one.
+`ayonto_mentionevent` is the product's own event ledger. It is the one table in
+this tree that was not copied from an export, because it has never existed in an
+environment to be exported from — see `powerplatform/README.md` for why, and
+`tools/powerplatform/generate-mentionevent-entity.py` for how it was derived from
+the export that does exist. That makes this contract worth more than usual: it is
+stated independently of the generator, so the two have to agree about what the
+table is before anything ships.
 """
 
 from __future__ import annotations
@@ -191,10 +192,7 @@ EXPECTED_TABLES = (
         # repository chooses, so the name is not asserted. That there is one is:
         # a table whose views live outside Entity.xml ships with none.
         views=None,
-        # Flips to True in the commit that integrates the real export. Until
-        # then the folder is legitimately absent, while a folder that *is* there
-        # is held to the full contract above.
-        required=False,
+        required=True,
         forbidden_substrings=FORBIDDEN_LEDGER_SUBSTRINGS,
     ),
 )

@@ -160,8 +160,7 @@ LEDGER_TABLE = PackagedTable(
     # Dataverse names the default view; this repository does not choose it. That
     # there is one is the thing worth asserting.
     views=None,
-    #: Flips to True in the release that ships the ledger.
-    required=False,
+    required=True,
     forbidden_substrings=(
         "deliverystatus",
         "deliverydetail",
