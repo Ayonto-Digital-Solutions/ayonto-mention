@@ -412,7 +412,17 @@ def main() -> int:
     TARGET.parent.mkdir(parents=True, exist_ok=True)
     ET.indent(tree, space="  ")
     tree.write(TARGET, encoding="utf-8", xml_declaration=True)
-    TARGET.write_text(TARGET.read_text(encoding="utf-8").rstrip("\n") + "\n", encoding="utf-8")
+
+    # ElementTree writes its own declaration and drops the namespace
+    # declaration on the root because nothing uses it. A real export has both,
+    # so they are taken verbatim from the export this file is derived from
+    # rather than written out here and left to drift from it.
+    legacy_header = LEGACY.read_text(encoding="utf-8").split("\n", 2)[:2]
+    written = TARGET.read_text(encoding="utf-8").split("\n", 2)
+    if not written[1].startswith("<Entity"):
+        raise SystemExit("the generated file does not open with <Entity>")
+    body = written[2].rstrip("\n")
+    TARGET.write_text("\n".join(legacy_header + [body]) + "\n", encoding="utf-8")
 
     custom = sum(1 for a in attributes if a.findtext("IsCustomField") == "1")
     print(f"wrote {TARGET.relative_to(ROOT)}")

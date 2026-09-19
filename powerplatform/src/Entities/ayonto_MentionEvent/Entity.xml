@@ -1,5 +1,5 @@
-<?xml version='1.0' encoding='utf-8'?>
-<Entity>
+<?xml version="1.0" encoding="utf-8"?>
+<Entity xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <Name LocalizedName="Mention" OriginalName="Mention">ayonto_MentionEvent</Name>
   <EntityInfo>
     <entity Name="ayonto_MentionEvent">
