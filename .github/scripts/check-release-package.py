@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import sys
 import zipfile
+from typing import NamedTuple
 from xml.etree import ElementTree
 
 SOLUTION_UNIQUE_NAME = "AyontoMention"
@@ -66,42 +67,127 @@ LEGACY_GROUP_CONTROL_SCHEMA_NAME = "ayonto_Ayonto.GroupDetailListControl"
 CUSTOM_CONTROL_COMPONENT_TYPE = "66"
 ENTITY_COMPONENT_TYPE = "1"
 
-#: The table, as the legacy solution exported it and as this package reuses it.
+#: The tables this package installs.
 #:
 #: Stated here rather than read out of the source tree: a checker that takes its
 #: expectations from the thing it is checking agrees with every drift, including
 #: the drift somebody did not mean to make.
-TABLE_LOGICAL_NAME = "ayonto_mention"
-TABLE_SCHEMA_NAME = "ayonto_Mention"
-TABLE_ENTITY_SET_NAME = "ayonto_mentions"
-#: UserOwned, exactly as exported. Ownership decides how row-level security
-#: behaves, so a package that changed it would be a different table wearing the
-#: same name.
-TABLE_OWNERSHIP = "UserOwned"
-TABLE_COLUMNS = frozenset(
-    {
-        "ayonto_Channel",
-        "ayonto_DeliveryDetail",
-        "ayonto_DeliveryStatus",
-        "ayonto_LinkText",
-        "ayonto_MentionId",
-        "ayonto_MentionedById",
-        "ayonto_Message",
-        "ayonto_Name",
-        "ayonto_RecordId",
-        "ayonto_RecordName",
-        "ayonto_RecordTable",
-        "ayonto_RecordUrl",
-        "ayonto_Subject",
-        "ayonto_UserEmail",
-        "ayonto_UserId",
-        "ayonto_UserName",
-    }
+#:
+#: What this file asks of them is what *packaging* can get wrong — the table is
+#: missing, it is the wrong table, it lost its view, it grew a link to something
+#: else. The per-column shapes of the event ledger are checked where the source
+#: is checked, on the same content that is packed here, rather than written out
+#: twice and left to drift apart.
+class PackagedTable(NamedTuple):
+    schema: str
+    logical: str
+    entity_set: str
+    ownership: str
+    columns: frozenset[str]
+    #: Exact view names, or None to require only that the table ships with one.
+    views: frozenset[str] | None
+    #: Whether the package has to carry it yet.
+    required: bool
+    forbidden_substrings: tuple[str, ...]
+
+
+LEGACY_TABLE = PackagedTable(
+    schema="ayonto_Mention",
+    logical="ayonto_mention",
+    entity_set="ayonto_mentions",
+    # UserOwned, exactly as exported. Ownership decides how row-level security
+    # behaves, so a package that changed it would be a different table wearing
+    # the same name.
+    ownership="UserOwned",
+    columns=frozenset(
+        {
+            "ayonto_Channel",
+            "ayonto_DeliveryDetail",
+            "ayonto_DeliveryStatus",
+            "ayonto_LinkText",
+            "ayonto_MentionId",
+            "ayonto_MentionedById",
+            "ayonto_Message",
+            "ayonto_Name",
+            "ayonto_RecordId",
+            "ayonto_RecordName",
+            "ayonto_RecordTable",
+            "ayonto_RecordUrl",
+            "ayonto_Subject",
+            "ayonto_UserEmail",
+            "ayonto_UserId",
+            "ayonto_UserName",
+        }
+    ),
+    views=frozenset({"Active Mentions"}),
+    required=True,
+    forbidden_substrings=(),
 )
-TABLE_VIEWS = frozenset({"Active Mentions"})
-#: The ownership relationships Dataverse gives a user-owned table. Six, no more:
-#: a seventh would mean this package had grown a link to something else.
-EXPECTED_RELATIONSHIPS = 6
+
+LEDGER_TABLE = PackagedTable(
+    schema="ayonto_MentionEvent",
+    logical="ayonto_mentionevent",
+    entity_set="ayonto_mentionevents",
+    # Organization-owned: a Mention Event is product and system state written
+    # authoritatively by the server, not something owned by whoever edited the
+    # business record.
+    ownership="OrganizationOwned",
+    columns=frozenset(
+        {
+            "ayonto_MentionEventId",
+            "ayonto_Name",
+            "ayonto_EventId",
+            "ayonto_RecordTable",
+            "ayonto_RecordId",
+            "ayonto_SourceField",
+            "ayonto_RecipientUserId",
+            "ayonto_InitiatingUserId",
+            "ayonto_ConfigSchemaVersion",
+            "ayonto_EmailEnabled",
+            "ayonto_EmailSubject",
+            "ayonto_EmailBody",
+            "ayonto_EmailLinkText",
+            "ayonto_TeamsEnabled",
+            "ayonto_TeamsTitle",
+            "ayonto_TeamsBody",
+            "ayonto_TeamsLinkText",
+            "ayonto_InAppEnabled",
+            "ayonto_InAppTitle",
+            "ayonto_InAppBody",
+            "ayonto_InAppLinkText",
+        }
+    ),
+    # Dataverse names the default view; this repository does not choose it. That
+    # there is one is the thing worth asserting.
+    views=None,
+    required=True,
+    forbidden_substrings=(
+        "deliverystatus",
+        "deliverydetail",
+        "deliveryattempt",
+        "recipientemail",
+        "recipientname",
+        "useremail",
+        "username",
+        "recordurl",
+        "recordname",
+        "formid",
+        "occurrences",
+        "channel",
+    ),
+)
+
+EXPECTED_TABLES = (LEGACY_TABLE, LEDGER_TABLE)
+
+#: The ownership relationships Dataverse gives the user-owned legacy table. The
+#: event ledger adds its own platform relationships, whose names and number are
+#: the platform's to decide — so the count is a floor, and every relationship is
+#: held to pointing at a platform table rather than at a host application's.
+MINIMUM_RELATIONSHIPS = 6
+#: The only tables ours may point at. A relationship to anything else would tie
+#: this reusable solution to one customer's schema.
+SYSTEM_RELATIONSHIP_TARGETS = frozenset({"businessunit", "systemuser", "team", "organization", "owner"})
+
 #: Every file this release's packages may contain, and no others.
 #:
 #: An allowlist rather than a list of things to refuse, because the interesting
@@ -211,9 +297,9 @@ def check_solution_manifest(
             f"{PUBLISHER_OPTION_VALUE_PREFIX!r} — it is fixed, not generated"
         )
 
-    # Two root components from v1.1.0: the table and the code component. Named
-    # rather than counted loosely, because "two of something" is not the check —
-    # which two is.
+    # The tables this release installs, plus the code component. Named rather
+    # than counted loosely, because "some number of things" is not the check —
+    # which things is.
     components = manifest.findall("RootComponents/RootComponent")
     declared = {
         (component.get("type"), component.get("schemaName")) for component in components
@@ -225,10 +311,17 @@ def check_solution_manifest(
                 "importing this would land on top of something forms already use"
             )
 
-    expected = {
-        (ENTITY_COMPONENT_TYPE, TABLE_LOGICAL_NAME),
-        (CUSTOM_CONTROL_COMPONENT_TYPE, CONTROL_SCHEMA_NAME),
+    expected = {(CUSTOM_CONTROL_COMPONENT_TYPE, CONTROL_SCHEMA_NAME)}
+    expected |= {
+        (ENTITY_COMPONENT_TYPE, table.logical) for table in EXPECTED_TABLES if table.required
     }
+    # A table that is not required yet may still be declared — the release that
+    # first ships it declares it before the flag above is flipped.
+    optional = {
+        (ENTITY_COMPONENT_TYPE, table.logical) for table in EXPECTED_TABLES if not table.required
+    }
+    declared_optional = declared & optional
+    expected |= declared_optional
     if declared != expected:
         missing = sorted(expected - declared)
         unexpected = sorted(declared - expected)
@@ -237,39 +330,63 @@ def check_solution_manifest(
         )
 
 
-def check_table(root: ElementTree.Element) -> None:
-    """The table this release exists to install, against the table it should be.
+def check_tables(root: ElementTree.Element) -> None:
+    """The tables this release exists to install, against the tables they should be.
 
     Required, not merely tolerated. A package that imports cleanly and leaves the
     environment without the table is the failure this whole file is here to
     catch, and from v1.1.0 that failure has a direction it did not have before.
     """
     entities = root.findall("Entities/Entity")
-    if len(entities) != 1:
+    packaged = {entity.findtext("Name") or "": entity for entity in entities}
+
+    known = {table.schema for table in EXPECTED_TABLES}
+    unexpected = sorted(set(packaged) - known)
+    if unexpected:
+        raise PackageError(f"the package carries the table(s) {unexpected}, which this release does not install")
+
+    for table in EXPECTED_TABLES:
+        entity = packaged.get(table.schema)
+        if entity is None:
+            if table.required:
+                raise PackageError(f"the package carries no {table.schema!r} table")
+            continue
+        check_table(table, entity)
+
+    relationships = root.findall("EntityRelationships/EntityRelationship")
+    if len(relationships) < MINIMUM_RELATIONSHIPS:
         raise PackageError(
-            f"expected exactly one table, found {len(entities)} — this release "
-            f"installs {TABLE_LOGICAL_NAME!r} and nothing else"
+            f"the package carries {len(relationships)} relationship(s), expected at least "
+            f"{MINIMUM_RELATIONSHIPS} — the ownership relationships of the user-owned table"
         )
 
-    entity = entities[0]
-    name = entity.findtext("Name")
-    if name != TABLE_SCHEMA_NAME:
-        raise PackageError(f"the packaged table is {name!r}, expected {TABLE_SCHEMA_NAME!r}")
+    ours = {table.logical for table in EXPECTED_TABLES}
+    for relationship in relationships:
+        name = relationship.get("Name", "")
+        referencing = (relationship.findtext("ReferencingEntityName") or "").lower()
+        referenced = (relationship.findtext("ReferencedEntityName") or "").lower()
+        if referencing not in ours:
+            raise PackageError(f"relationship {name!r} is declared on {referencing!r}, which is not a table of this solution")
+        if referenced not in SYSTEM_RELATIONSHIP_TARGETS:
+            raise PackageError(
+                f"relationship {name!r} points at {referenced!r} — this solution is reusable and "
+                "host-independent, and a link to a host application's table belongs to the host solution"
+            )
 
+
+def check_table(table: PackagedTable, entity: ElementTree.Element) -> None:
     described = entity.find("./EntityInfo/entity")
     if described is None:
-        raise PackageError("the packaged table has no EntityInfo/entity")
+        raise PackageError(f"the packaged table {table.schema!r} has no EntityInfo/entity")
 
     entity_set = described.findtext("EntitySetName")
-    if entity_set != TABLE_ENTITY_SET_NAME:
-        raise PackageError(
-            f"EntitySetName is {entity_set!r}, expected {TABLE_ENTITY_SET_NAME!r}"
-        )
+    if entity_set != table.entity_set:
+        raise PackageError(f"{table.logical}: EntitySetName is {entity_set!r}, expected {table.entity_set!r}")
 
     ownership = described.findtext("OwnershipTypeMask")
-    if ownership != TABLE_OWNERSHIP:
+    if ownership != table.ownership:
         raise PackageError(
-            f"the table is {ownership!r}, expected {TABLE_OWNERSHIP!r} — ownership "
+            f"{table.logical}: the table is {ownership!r}, expected {table.ownership!r} — ownership "
             "decides how row-level security behaves and is not a packaging detail"
         )
 
@@ -279,11 +396,35 @@ def check_table(root: ElementTree.Element) -> None:
         if attribute.findtext("IsCustomField") == "1"
         or attribute.findtext("Type") == "primarykey"
     }
-    if columns != TABLE_COLUMNS:
-        missing = sorted(TABLE_COLUMNS - columns)
-        unexpected = sorted(columns - TABLE_COLUMNS)
+
+    for column in sorted(columns):
+        lowered = column.lower()
+        for forbidden in table.forbidden_substrings:
+            if forbidden in lowered:
+                raise PackageError(
+                    f"{table.logical}: the column {column!r} carries {forbidden!r}. Delivery state is "
+                    "per channel and is designed later, and a recipient is resolved server-side from "
+                    "an identifier — never from a stored name or address"
+                )
+
+    if columns != table.columns:
+        missing = sorted(table.columns - columns)
+        unexpected = sorted(columns - table.columns)
         raise PackageError(
-            f"the table's columns are wrong — missing {missing}, unexpected {unexpected}"
+            f"{table.logical}: the table's columns are wrong — missing {missing}, unexpected {unexpected}"
+        )
+
+    lookups = sorted(
+        attribute.get("PhysicalName", "")
+        for attribute in entity.iter("attribute")
+        if attribute.findtext("IsCustomField") == "1"
+        and attribute.findtext("Type") in ("lookup", "customer", "owner")
+    )
+    if lookups and table is LEDGER_TABLE:
+        raise PackageError(
+            f"{table.logical}: carries the lookup column(s) {lookups}. The recipient, the actor and "
+            "the source row are scalar identifiers precisely so that this solution needs no link to "
+            "a host table or to systemuser"
         )
 
     views = set()
@@ -291,25 +432,25 @@ def check_table(root: ElementTree.Element) -> None:
         localized = query.find("./LocalizedNames/LocalizedName")
         if localized is not None:
             views.add(localized.get("description", ""))
-    if views != TABLE_VIEWS:
+    if table.views is not None:
+        if views != table.views:
+            raise PackageError(
+                f"{table.logical}: the table carries the views {sorted(views)}, expected "
+                f"{sorted(table.views)} — a view configured outside Entity.xml is packed silently "
+                "into nothing"
+            )
+    elif not views:
         raise PackageError(
-            f"the table carries the views {sorted(views)}, expected {sorted(TABLE_VIEWS)} — "
-            "a view configured outside Entity.xml is packed silently into nothing"
-        )
-
-    relationships = root.findall("EntityRelationships/EntityRelationship")
-    if len(relationships) != EXPECTED_RELATIONSHIPS:
-        raise PackageError(
-            f"the package carries {len(relationships)} relationship(s), expected "
-            f"{EXPECTED_RELATIONSHIPS} — the ownership relationships of a user-owned table"
+            f"{table.logical}: the table carries no view at all — a view configured outside "
+            "Entity.xml is packed silently into nothing"
         )
 
 
 def check_customizations(customizations_xml: bytes) -> None:
-    """One code component, one table, and none of the things a server side would add."""
+    """One code component, the tables this release installs, and none of the things a server side would add."""
     root = ElementTree.fromstring(customizations_xml)
 
-    check_table(root)
+    check_tables(root)
 
     for name in MUST_BE_EMPTY:
         element = root.find(name)

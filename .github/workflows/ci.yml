@@ -54,6 +54,16 @@ jobs:
       - name: Check the solution source
         run: python3 .github/scripts/check-solution-source.py
 
+      # The event ledger's table source is derived from the real legacy export
+      # by a committed script. Running it must reproduce exactly what is
+      # committed: a hand edit to the generated XML, or a change to the
+      # derivation that nobody regenerated, shows up here rather than in a
+      # failed import.
+      - name: Check the derived table source is what the generator produces
+        run: |
+          python3 tools/powerplatform/generate-mentionevent-entity.py
+          git diff --exit-code -- powerplatform/src/Entities/ayonto_MentionEvent/Entity.xml
+
       # The version contract: a four-part solution version, a three-part control
       # version, and nothing deriving one from the other. These run here rather
       # than only in the release workflow, because the release workflow is the

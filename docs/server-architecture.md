@@ -2,13 +2,19 @@
 
 How a mention becomes a notification, and which solution owns which part of that.
 
-**One part of this now exists, and it is worth being exact about which.** From
-v1.1.0 the solution package installs the central `ayonto_mention` table: the
-schema is shipped. Nothing writes to it — and the **Target architecture** section
-immediately below supersedes that table as the product ledger, without changing
-what the current release contains. The ingest step, the dispatcher and
-every delivery channel described below are still designed and unbuilt, so a
-mention still becomes a bound output on a business record and stops there.
+**Some of this now exists, and it is worth being exact about which.** From
+v1.1.0 the solution package installs the central `ayonto_mention` table, and the
+1.1.0.1 candidate adds the product's own `ayonto_mentionevent` alongside it: both
+schemas are in the package. Nothing writes to either. The ingest step, the
+dispatcher and every delivery channel described below are still designed and
+unbuilt, so a mention still becomes a bound output on a business record and stops
+there.
+
+**And a package is not an import.** The event table's source is derived rather
+than exported — see [`powerplatform/README.md`](../powerplatform/README.md) — and
+a solution that packs cleanly is not evidence that Dataverse accepts it. Until
+the managed import has run in a real environment, the event table exists in this
+repository and nowhere else.
 
 The rest is written down so that the implementation, when it happens, is the
 implementation of a decision rather than a rediscovery of one — and so that the
@@ -21,14 +27,18 @@ only commit boundary there is.
 
 ## Target architecture
 
-**Everything in this section is a target. None of it is built.** It is recorded
-so the shape is settled before anything is written against it, and so the places
-that are *not* settled are visible rather than assumed.
+**Most of this section is still a target, and the parts that are not are named
+where they appear.** What exists is the event table's solution source, in the
+1.1.0.1 candidate and not yet proven against a real import. The ingest, the
+authoritative configuration resolution, the dispatcher and every delivery channel
+are unbuilt. It is recorded so the shape is settled before anything is written
+against it, and so the places that are *not* settled are visible rather than
+assumed.
 
 ### The product event table
 
-The next planned product version introduces a table that belongs to this product
-and to nothing else:
+The 1.1.0.1 candidate introduces a table that belongs to this product and to
+nothing else:
 
 | | |
 |---|---|
@@ -238,14 +248,78 @@ event waiting in a queue would go out under whatever happened to be published
 when the dispatcher reached it, and a retry could differ from the attempt it was
 retrying. With one, an event means the same thing for its whole life.
 
-**The exact Dataverse columns and the exact JSON shape of that snapshot are
-deliberately not decided here.** That is the next design step, and settling it in
-this section — ahead of the rest of the event schema — would freeze the wrong
-half first.
+That snapshot is **typed columns, not a JSON document.** One column per setting,
+which the dispatcher reads straight off the row: no contract to parse, no
+schema-version branch in a flow, and a wrong value visible in an ordinary view
+rather than inside a string. `ayonto_ConfigSchemaVersion` records which shape a
+row was written in, so a later channel can be added without guessing at the old
+rows.
+
+### The ledger's columns
+
+| | Type | Length | Required |
+|---|---|---|---|
+| `ayonto_Name` | Single line of text | 200 | yes |
+| `ayonto_EventId` | Single line of text | 36 | yes |
+| `ayonto_RecordTable` | Single line of text | 128 | yes |
+| `ayonto_RecordId` | Single line of text | 36 | yes |
+| `ayonto_SourceField` | Single line of text | 128 | yes |
+| `ayonto_RecipientUserId` | Single line of text | 36 | yes |
+| `ayonto_InitiatingUserId` | Single line of text | 36 | yes |
+| `ayonto_ConfigSchemaVersion` | Whole number | | yes |
+| `ayonto_{Email,Teams,InApp}Enabled` | Yes/No, default No | | yes |
+| `ayonto_EmailSubject`, `ayonto_{Teams,InApp}Title` | Single line of text | 4000 | no |
+| `ayonto_{Email,Teams,InApp}Body` | Multiple lines of text | 100000 | no |
+| `ayonto_{Email,Teams,InApp}LinkText` | Single line of text | 4000 | no |
+
+`ayonto_Name` is a label for people reading a grid. It is not part of the
+identity and nothing resolves anything from it.
+
+**There are no lookups on this table** — not to `systemuser`, not to the host
+table, not to anything. A lookup would make this reusable solution depend on one
+customer's schema, and a recipient lookup would quietly turn a Dataverse
+relationship into delivery authority. The recipient, the actor and the source row
+are each a scalar identifier, resolved server-side at the moment it is used.
+
+### Why the identifiers are text
+
+Not by preference. **Dataverse has no custom Unique Identifier column**: the
+platform's own type table marks `UniqueidentifierType` as one you cannot create,
+and the maker documentation lists Unique Identifier under *"column types used by
+the system"* that *"you can't add by using the designer"*
+([Column definitions](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/entity-attribute-metadata),
+[Column data types](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/types-of-fields)).
+The only GUID-typed column a table gets is the primary key the platform creates,
+and `ayonto_EventId` cannot be that one — an episode naming several people is
+several rows sharing one `eventId`, so it is not row-unique.
+
+So each identifier is text, and the length is the contract: **36 characters,
+canonical, hyphenated, lowercase**. A braced or parenthesised GUID does not fit
+in 36 characters, which is the point — the column cannot hold an ambiguous
+spelling of the same value.
+
+The ingest parses every identifier as a GUID and writes
+`Guid.ToString("D")`, rejecting anything it cannot parse. Values from the trusted
+execution context are converted directly; values arriving through the companion
+payload are validated first. **Identity is never compared on unnormalised
+strings** — two spellings of one GUID would otherwise be two recipients.
+
+### Required is the ingest's word, not the platform's
+
+The required columns are `ApplicationRequired`, and that is as strong as a custom
+column gets: *"Custom columns can't be set to use the SystemRequired option"*,
+and *"Dataverse doesn't return an error when a column with `ApplicationRequired`
+applied doesn't have a value"*
+([Column definitions](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/entity-attribute-metadata)).
+
+Model-driven apps honour it; the platform does not enforce it. So the hard
+contract belongs to the ingest, which fails **before** creating an event if any
+identity or configuration value is missing or unparseable. Nothing downstream may
+assume a column is populated because the schema says required.
 
 **None of this is built.** Nothing in this repository resolves form metadata,
-validates a configuration, or creates an event. What is settled is the route, not
-its implementation.
+validates a configuration, or creates an event. What is settled is the route and
+the shape, not the implementation.
 
 ### One dispatcher for every host
 
@@ -357,14 +431,16 @@ implemented, and nothing here should be read as saying it is.
 | | Current release | Target |
 |---|---|---|
 | Code component | `Ayonto.AyontoMentionControl` | unchanged |
-| Product table | the legacy-derived table this release packages, **UserOwned** | `ayonto_mentionevent`, product-owned, **Organization-owned** |
+| Product table | the legacy-derived table, **UserOwned**, plus `ayonto_mentionevent`, **Organization-owned**, in the 1.1.0.1 package — not yet import-proven | `ayonto_mentionevent` alone, once the legacy table is retired |
 | Ingest | none | async PostOperation step, host-registered |
 | Dispatcher | none | one universal solution-aware flow, in its own central automation solution |
 | Delivery | none | e-mail · Teams · in-app, state per channel |
 | Maker notification config | none | set on the component, resolved server-side from published `FormXml` per `recordTable + sourceField` |
 | Companion metadata | required, host-owned, hand-configured | required today; hand-configuration to disappear later |
 
-The target version does not exist. Nothing below the code-component row is built.
+Only the product-table row has moved. Everything below it is unbuilt, and the
+event table's presence in a package is not the same claim as its presence in an
+environment.
 
 ## The shape of it
 
@@ -375,18 +451,19 @@ flowchart TD
     text --> save["Source-record save"]
     meta --> save
     save -.-> step["planned: async PostOperation step<br/>on the host source table"]
-    step -.-> ledger["target: ayonto_mentionevent<br/>(v1.1.0 packages the legacy-derived table)"]
+    step -.-> ledger["ayonto_mentionevent<br/>(packaged in 1.1.0.1, import unproven)"]
     ledger -.-> dispatcher["planned: dispatcher"]
     dispatcher -.-> channels["planned: e-mail · Teams · in-app"]
 ```
 
 Solid arrows exist today. Everything dotted is designed and unbuilt — with one
-exception: the ledger box is a table that v1.1.0 actually installs. The arrows
-into and out of it are not.
+exception: the ledger box is a table the package carries. The arrows into and out
+of it are not.
 
-**Packaged is not implemented.** The table being present in an environment says
-nothing about anything writing to or reading from it, and this document should
-not be read as if it did.
+**Packaged is not implemented, and packaged is not imported.** A table in a
+solution says nothing about anything writing to or reading from it, and this
+candidate's event table has not yet been accepted by a Dataverse environment at
+all. This document should not be read as if either had happened.
 
 ## Two solutions, and why
 

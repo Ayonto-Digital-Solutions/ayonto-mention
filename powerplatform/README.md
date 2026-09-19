@@ -100,7 +100,7 @@ A hand-written `RibbonDiff.xml` is a fourth: the packer answers it with a
 | Publisher choice value prefix | `14144`         |
 | Code component                | `Ayonto.AyontoMentionControl` |
 | Table (current)               | `ayonto_mention`, **UserOwned**, from v1.1.0 |
-| Table (target)                | `ayonto_mentionevent`, product-owned, **Organization-owned** — see [Target architecture](../docs/server-architecture.md#target-architecture); **not built** |
+| Table (product)               | `ayonto_mentionevent`, **Organization-owned**, from the 1.1.0.1 candidate — derived from the legacy export, **not yet import-proven** |
 
 **The choice value prefix is taken from the publisher that already exists.**
 Dataverse derives the values of choices created under a publisher from it, and
@@ -176,6 +176,29 @@ rather than a flow per table, is in
 - **Do not hand-author table metadata in this tree.** `Entity.xml` and
   `Relationships.xml` come from a real Dataverse export and are copied, not
   written. Hand-written metadata drifts from the schema and breaks import.
+
+  **`ayonto_MentionEvent` is the one documented exception, and it is worth
+  knowing why before trusting it.** That table has never existed in a Dataverse
+  environment, so there was no export to copy: the development environment
+  cannot run the tooling that would have created it there, so the table reaches
+  Dataverse the other way round — described here and created by the managed
+  import.
+
+  It is still not typed by hand. `tools/powerplatform/generate-mentionevent-entity.py`
+  derives it from `ayonto_Mention/Entity.xml` — this repository's own real
+  export — substituting names, labels, lengths and requirement levels and
+  nothing else. The two column shapes the legacy table does not have, whole
+  number and two options, are reproduced verbatim from Microsoft's own published
+  solution exports, named in that script.
+
+  What no export could supply is marked `UNVERIFIED` there: no public Dataverse
+  export of an *organization-owned* custom table exists, so the ownership column
+  and the organization relationship are reasoned from Microsoft's table
+  reference rather than copied. **The managed import into a real environment is
+  what decides whether that reasoning was right.** A local SolutionPackager
+  build proves the file packs, not that Dataverse accepts it. If the import
+  fails, correct the derivation from the real import error — do not patch the
+  generated XML by hand, or the next regeneration silently undoes the fix.
   Solution-level packaging metadata — unique name, display name, version, root
   components — is a different thing and may be edited deliberately.
 - The control is contributed by the PCF project in [`../pcf`](../pcf) and is
