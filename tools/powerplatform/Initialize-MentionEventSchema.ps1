@@ -297,7 +297,8 @@ function Invoke-Dataverse {
         [string] $Method,
         [string] $Path,
         [hashtable] $Body,
-        [switch] $AllowNotFound
+        [switch] $AllowNotFound,
+        [switch] $StrongConsistency
     )
 
     $headers = @{
@@ -308,6 +309,20 @@ function Invoke-Dataverse {
     }
     if ($Method -in @('POST', 'PUT', 'PATCH')) {
         $headers['MSCRM.SolutionUniqueName'] = $SolutionUniqueName
+    }
+    if ($StrongConsistency) {
+        # "Metadata changes are cached for performance reasons and a request for
+        # a newly created item might return a 404 because it hasn't been cached
+        # yet. Caching might take 30 seconds. This header forces the server to
+        # read the latest version including your changes."
+        # https://learn.microsoft.com/power-apps/developer/data-platform/webapi/web-api-metadata-operations-sample
+        #
+        # Microsoft asks that it be used only when reading back changes you just
+        # made, which is the whole job of this script. Every metadata read here
+        # is either verifying what it just wrote or deciding whether to write, so
+        # a cached answer is never the answer this script wants — including under
+        # -VerifyOnly, where a stale read would report a schema nobody has.
+        $headers['Consistency'] = 'Strong'
     }
 
     $arguments = @{
@@ -344,7 +359,7 @@ function Invoke-Dataverse {
 
 function Get-ExistingTable {
     $select = 'LogicalName,SchemaName,EntitySetName,OwnershipType,PrimaryNameAttribute,IsManaged'
-    return Invoke-Dataverse -Method GET -AllowNotFound `
+    return Invoke-Dataverse -Method GET -AllowNotFound -StrongConsistency `
         -Path "EntityDefinitions(LogicalName='$($script:Table.LogicalName)')?`$select=$select"
 }
 
@@ -352,7 +367,7 @@ function Get-BaseColumns {
     # What every column has, whatever its type. Enough to find columns that
     # should not be there at all, including lookups.
     $select = 'LogicalName,SchemaName,AttributeType,IsCustomAttribute'
-    $response = Invoke-Dataverse -Method GET `
+    $response = Invoke-Dataverse -Method GET -StrongConsistency `
         -Path "EntityDefinitions(LogicalName='$($script:Table.LogicalName)')/Attributes?`$select=$select"
     return $response.value
 }
@@ -378,7 +393,7 @@ function Get-TypedColumns {
     foreach ($cast in $casts) {
         $path = "EntityDefinitions(LogicalName='$($script:Table.LogicalName)')/Attributes/" +
                 "Microsoft.Dynamics.CRM.$($cast.Type)?`$select=$($cast.Select)"
-        $response = Invoke-Dataverse -Method GET -Path $path
+        $response = Invoke-Dataverse -Method GET -StrongConsistency -Path $path
         foreach ($column in $response.value) {
             $found[$column.LogicalName] = [pscustomobject]@{
                 Kind     = $cast.Kind
@@ -602,7 +617,11 @@ if ($null -eq $existing) {
     Publish-Table
 
     $existing = Get-ExistingTable
-    if ($null -eq $existing) { Stop-Closed 'the table was created but cannot be read back.' }
+    if ($null -eq $existing) {
+        # Read with Consistency: Strong, so this is not the metadata cache
+        # lagging behind — the table genuinely is not there.
+        Stop-Closed 'the table was created but cannot be read back.'
+    }
 }
 else {
     Write-Step "the table already exists (managed: $($existing.IsManaged))"

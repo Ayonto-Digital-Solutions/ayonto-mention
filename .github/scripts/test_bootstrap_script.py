@@ -168,6 +168,54 @@ class SafetyTests(unittest.TestCase):
         self.assertNotRegex(SOURCE, r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
+def function_body(name: str) -> str:
+    """The text of one PowerShell function, up to the next one."""
+    start = SOURCE.index(f"function {name} {{")
+    remainder = SOURCE[start + len(name) + 12 :]
+    end = remainder.find("\nfunction ")
+    return remainder if end == -1 else remainder[:end]
+
+
+class MetadataCacheTests(unittest.TestCase):
+    """Metadata is cached, so reading back what was just written needs asking.
+
+    "Metadata changes are cached for performance reasons and a request for a
+    newly created item might return a 404 because it hasn't been cached yet.
+    Caching might take 30 seconds." Without the header, a successful create is
+    followed by a read that finds nothing, and the script reports a failure that
+    did not happen.
+    """
+
+    def test_the_transport_can_ask_for_strong_consistency(self) -> None:
+        self.assertIn("[switch] $StrongConsistency", SOURCE)
+        self.assertIn("$headers['Consistency'] = 'Strong'", SOURCE)
+
+    def test_the_table_read_asks_for_it(self) -> None:
+        self.assertIn("-StrongConsistency", function_body("Get-ExistingTable"))
+
+    def test_the_base_column_read_asks_for_it(self) -> None:
+        self.assertIn("-StrongConsistency", function_body("Get-BaseColumns"))
+
+    def test_every_typed_column_read_asks_for_it(self) -> None:
+        body = function_body("Get-TypedColumns")
+        calls = [line for line in body.splitlines() if "Invoke-Dataverse" in line]
+        self.assertTrue(calls, "Get-TypedColumns makes no request")
+        for call in calls:
+            self.assertIn("-StrongConsistency", call)
+
+    def test_whoami_does_not_ask_for_it(self) -> None:
+        # Not a metadata read, and the header costs the caching it would gain
+        # nothing from.
+        call = next(line for line in SOURCE.splitlines() if "-Path 'WhoAmI'" in line)
+        self.assertNotIn("-StrongConsistency", call)
+
+    def test_no_sleep_or_retry_was_used_instead(self) -> None:
+        # Waiting out a cache is a guess about how long it takes. The header is
+        # the answer the platform documents.
+        for workaround in ("Start-Sleep", "retry", "Retry"):
+            self.assertNotIn(workaround, SOURCE, f"the script works around the cache with {workaround}")
+
+
 class CommandLineTests(unittest.TestCase):
     """`--managed` and `--allowDelete` are switches. Giving them a value is wrong."""
 
