@@ -131,7 +131,9 @@ def build_source(
     *,
     with_ledger: bool = True,
     ledger_columns: list[tuple[str, str, str | None, int | None, str]] | None = None,
-    ledger_ownership: str = "OrganizationOwned",
+    # The raw solution-XML value, which is not the ownership model's name:
+    # Dataverse calls the model OrganizationOwned and serializes it OrgOwned.
+    ledger_ownership: str = "OrgOwned",
     ledger_views: list[str] | None = None,
     ledger_entity_set: str = "ayonto_mentionevents",
     extra_relationships: list[tuple[str, str, str]] | None = None,
@@ -281,6 +283,28 @@ class SourceCheckerTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("OwnershipTypeMask", said)
         self.assertIn("cannot be changed afterwards", said)
+
+    def test_rejects_the_ownership_model_name_as_the_raw_value(self) -> None:
+        """The exact mistake the real v1.1.0.1 import rejected.
+
+        `OrganizationOwned` is what Dataverse calls the ownership model. It is
+        not what solution XML serializes, and an import carrying it failed with
+        0x80044150, "Requested value 'OrganizationOwned' was not found". The
+        table is still organization-owned; only the raw value was wrong, and a
+        checker that reads the two as interchangeable would have let it ship.
+        """
+        code, said = run(build_source(self.root, ledger_ownership="OrganizationOwned"))
+        self.assertEqual(code, 1)
+        self.assertIn("OwnershipTypeMask", said)
+        self.assertIn("OrgOwned", said)
+
+    def test_the_committed_ledger_source_serializes_ownership_as_orgowned(self) -> None:
+        """Read off the committed file, not off the checker's own expectation."""
+        entity = (
+            REPOSITORY_SOURCE / "src" / "Entities" / "ayonto_MentionEvent" / "Entity.xml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("<OwnershipTypeMask>OrgOwned</OwnershipTypeMask>", entity)
+        self.assertNotIn("<OwnershipTypeMask>OrganizationOwned</OwnershipTypeMask>", entity)
 
     # -- the no-lookup rule -------------------------------------------------
 

@@ -151,6 +151,12 @@ class Table(NamedTuple):
     folder: str
     logical: str
     entity_set: str
+    #: The raw <OwnershipTypeMask> value in solution XML. Not the same string as
+    #: the ownership model's name: Dataverse calls the model OrganizationOwned
+    #: and serializes it as OrgOwned. See `ownership` below.
+    ownership_mask: str
+    #: The ownership model's Dataverse name, for anything a person reads. Never
+    #: compared against XML.
     ownership: str
     #: Names only, or names with their shapes. Exactly one of the two.
     columns: frozenset[str] | None
@@ -169,7 +175,9 @@ EXPECTED_TABLES = (
         entity_set="ayonto_mentions",
         # UserOwned, and deliberately not changed. Ownership decides how
         # row-level security behaves, and changing it here would be redesigning
-        # a table this release is only repackaging.
+        # a table this release is only repackaging. Model and serialization are
+        # the same word for this one; the real export spells it UserOwned.
+        ownership_mask="UserOwned",
         ownership="UserOwned",
         columns=LEGACY_COLUMNS,
         typed_columns=None,
@@ -185,6 +193,13 @@ EXPECTED_TABLES = (
         # state written authoritatively by the server. It is not owned by
         # whoever happened to edit the business record, and record ownership
         # must never become notification identity or authorization.
+        #
+        # The model is OrganizationOwned; solution XML serializes it as
+        # OrgOwned. v1.1.0.1 shipped the model's name as the raw value and the
+        # real managed import rejected the table with 0x80044150, "Requested
+        # value 'OrganizationOwned' was not found". The raw value is what is
+        # compared here, so that mistake cannot reach a package again.
+        ownership_mask="OrgOwned",
         ownership="OrganizationOwned",
         columns=None,
         typed_columns=LEDGER_COLUMNS,
@@ -333,10 +348,11 @@ def check_table(table: Table, declared: set[str]) -> None:
         fail(f"{logical}: EntitySetName is {entity_set!r}, expected {table.entity_set!r}")
 
     ownership = described.findtext("OwnershipTypeMask")
-    if ownership != table.ownership:
+    if ownership != table.ownership_mask:
         fail(
-            f"{logical}: OwnershipTypeMask is {ownership!r}, expected {table.ownership!r} — "
-            "ownership is chosen when a table is created and cannot be changed afterwards"
+            f"{logical}: OwnershipTypeMask is {ownership!r}, expected {table.ownership_mask!r} — "
+            "ownership is chosen when a table is created and cannot be changed afterwards, "
+            f"and solution XML serializes the {table.ownership} model as {table.ownership_mask}"
         )
 
     attributes = [

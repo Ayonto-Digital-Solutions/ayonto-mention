@@ -14,9 +14,9 @@
 # only carry what the workflow remembers to hand it.
 #
 # From v1.1.0 the source is checked in, so what ships is what can be read in the
-# repository: the ayonto_mention table under powerplatform/src, and the code
-# component through the project reference in the cdsproj. This workflow only
-# stamps the version and builds.
+# repository: the tables under powerplatform/src — ayonto_mention and
+# ayonto_mentionevent — and the code component through the project reference in
+# the cdsproj. This workflow only stamps the version and builds.
 name: Release
 
 on:
@@ -471,18 +471,17 @@ jobs:
           # left to a generated changelog that only lists commits.
           cat > /tmp/notes.md <<NOTES
           **Ayonto Mention.** This package installs the Power Apps code component
-          **and the central \`ayonto_mention\` Dataverse table**.
+          and two Dataverse tables: **\`ayonto_mention\`** and
+          **\`ayonto_mentionevent\`**, the product's own event table, which is
+          organization-owned.
 
-          Importing it creates the table. That is the change in this release:
-          every version up to v1.0.2 was the code component alone.
-
-          **It still does not send notifications.** There is no server-side
-          ingest, no dispatcher, no e-mail, Teams or in-app delivery in this
-          package. Selecting a mention writes the text and the companion metadata
-          onto the record being edited, exactly as before — it does **not** create
-          a row in \`ayonto_mention\`, because the server-side step that would do
-          that is not implemented yet. The table ships so that it can be imported
-          and validated in a real environment ahead of that work.
+          **It does not send notifications.** There is no server-side ingest, no
+          dispatcher, no e-mail, Teams or in-app delivery in this package.
+          Selecting a mention writes the bound text and the companion metadata
+          onto the record being edited, and nothing else — it does **not** create
+          a row in either table, because the server-side step that would do that
+          is not implemented yet. Saving the record remains the only commit
+          boundary.
 
           Solution version \`${SOLUTION_VERSION}\`, code component version
           \`${CONTROL_VERSION}\`. The two are versioned separately: a Dataverse
