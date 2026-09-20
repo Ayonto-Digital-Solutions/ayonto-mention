@@ -28,8 +28,8 @@ only commit boundary there is.
 ## Target architecture
 
 **Most of this section is still a target, and the parts that are not are named
-where they appear.** What exists is the event table's solution source, in the
-1.1.0.2 candidate and not yet proven against a real import. The ingest, the
+where they appear.** What exists is the event table's solution source, shipped
+since v1.1.0.1 and not yet proven against a real import. The ingest, the
 authoritative configuration resolution, the dispatcher and every delivery channel
 are unbuilt. It is recorded so the shape is settled before anything is written
 against it, and so the places that are *not* settled are visible rather than
@@ -37,8 +37,8 @@ assumed.
 
 ### The product event table
 
-The 1.1.0.2 candidate introduces a table that belongs to this product and to
-nothing else:
+The table that belongs to this product and to nothing else first shipped as
+solution source in v1.1.0.1:
 
 | | |
 |---|---|
@@ -439,7 +439,7 @@ implemented, and nothing here should be read as saying it is.
 | | Current release | Target |
 |---|---|---|
 | Code component | `Ayonto.AyontoMentionControl` | unchanged |
-| Product table | the legacy-derived table, **UserOwned**, plus `ayonto_mentionevent`, **Organization-owned**, in the 1.1.0.2 package — not yet import-proven | `ayonto_mentionevent` alone, once the legacy table is retired |
+| Product table | the legacy-derived table, **UserOwned**, plus `ayonto_mentionevent`, **Organization-owned**, in the package since v1.1.0.1 — not yet import-proven | `ayonto_mentionevent` alone, once the legacy table is retired |
 | Ingest | none | async PostOperation step, host-registered |
 | Dispatcher | none | one universal solution-aware flow, in its own central automation solution |
 | Delivery | none | e-mail · Teams · in-app, state per channel |
@@ -459,7 +459,7 @@ flowchart TD
     text --> save["Source-record save"]
     meta --> save
     save -.-> step["planned: async PostOperation step<br/>on the host source table"]
-    step -.-> ledger["ayonto_mentionevent<br/>(packaged in 1.1.0.2, import unproven)"]
+    step -.-> ledger["ayonto_mentionevent<br/>(packaged since v1.1.0.1, import unproven)"]
     ledger -.-> dispatcher["planned: dispatcher"]
     dispatcher -.-> channels["planned: e-mail · Teams · in-app"]
 ```
