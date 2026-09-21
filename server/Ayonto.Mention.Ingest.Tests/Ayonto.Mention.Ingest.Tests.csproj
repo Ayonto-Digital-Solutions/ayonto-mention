@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The ingest's unit tests, and they need no Dataverse.
+
+    net48, the same framework the plug-in assembly ships as. That is not a detail:
+    the assembly that runs in the sandbox is a .NET Framework assembly, and a test
+    suite that proved the code on a different runtime would be proving something
+    adjacent to what ships. The consequence is that these tests execute on Windows —
+    .NET Framework has no runtime anywhere else — which is why CI runs this project
+    on a Windows runner while everything else stays on Ubuntu.
+
+    The alternative was considered and rejected: `Microsoft.CrmSdk.CoreAssemblies`
+    ships `lib/net462` only, so testing on a modern runtime would mean taking the
+    Dataverse SDK from `Microsoft.PowerPlatform.Dataverse.Client` instead — a package
+    whose dependency tree currently carries a known high-severity advisory. Trading
+    fidelity for that is not a trade worth making in a test project.
+
+    Nothing here talks to a Dataverse. Everything the ingest needs from the platform
+    is behind an interface — `IOrganizationService`, `ITracingService`,
+    `IPluginExecutionContext` — and the fakes under Fakes/ implement them.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <LangVersion>7.3</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RootNamespace>Ayonto.Mention.Ingest.Tests</RootNamespace>
+    <AssemblyName>Ayonto.Mention.Ingest.Tests</AssemblyName>
+    <NeutralLanguage>en</NeutralLanguage>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.0.2" />
+    <PackageReference Include="Microsoft.CrmSdk.CoreAssemblies" Version="9.0.2.60" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ayonto.Mention.Ingest\Ayonto.Mention.Ingest.csproj" />
+  </ItemGroup>
+
+  <!--
+    The ingest's own sources, embedded so that one test can read them.
+    `LedgerTargetTests` scans them for a string literal naming the legacy table: the
+    regression it guards against is somebody writing `"ayonto_mention"` into a query
+    or a create, and the only way to catch that as a test rather than as a review is
+    to look at the source. Embedded rather than read off disk, so the test does not
+    depend on where it is run from.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\Ayonto.Mention.Ingest\**\*.cs"
+                      Exclude="..\Ayonto.Mention.Ingest\obj\**;..\Ayonto.Mention.Ingest\bin\**"
+                      LogicalName="IngestSource.%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

@@ -163,6 +163,9 @@ class Table(NamedTuple):
     typed_columns: dict[str, Column] | None
     #: Exact view names, or None to require only that the table ships with one.
     views: frozenset[str] | None
+    #: Alternate keys, by logical name, each with the columns it covers. An empty
+    #: mapping means the table must carry none.
+    alternate_keys: dict[str, tuple[str, ...]]
     #: Whether the table has to be in the source yet.
     required: bool
     forbidden_substrings: tuple[str, ...]
@@ -182,6 +185,9 @@ EXPECTED_TABLES = (
         columns=LEGACY_COLUMNS,
         typed_columns=None,
         views=frozenset({"Active Mentions"}),
+        # None, and asserted rather than left unsaid: this file is a verbatim
+        # export, and a key appearing in it would mean somebody edited it.
+        alternate_keys={},
         required=True,
         forbidden_substrings=(),
     ),
@@ -207,6 +213,17 @@ EXPECTED_TABLES = (
         # repository chooses, so the name is not asserted. That there is one is:
         # a table whose views live outside Entity.xml ships with none.
         views=None,
+        # The uniqueness the ingest's idempotency rests on, in the database rather
+        # than in the handler. The ingest looks for an existing event and then
+        # creates one, and those are two operations: two asynchronous jobs for the
+        # same episode can both find nothing and both write. A query cannot prevent
+        # that and a constraint can, so `eventId` carries an alternate key.
+        #
+        # One column, because that is already the contract — an event identifier
+        # names one episode for one recipient, so it names one row — and because it
+        # is what turns the documented conflict rule into something the platform
+        # enforces rather than something the handler hopes for.
+        alternate_keys={"ayonto_mentionevent_ak_eventid": ("ayonto_eventid",)},
         required=True,
         forbidden_substrings=FORBIDDEN_LEDGER_SUBSTRINGS,
     ),
@@ -313,6 +330,46 @@ def check_tables(declared: set[str]) -> None:
             print(f"  table {table.logical}: not in the solution source yet")
 
 
+def read_alternate_keys(root: ET.Element) -> dict[str, tuple[str, ...]]:
+    """The alternate keys a table's source declares, by logical name."""
+    keys: dict[str, tuple[str, ...]] = {}
+    for key in root.iter("EntityKey"):
+        logical = (key.findtext("LogicalName") or "").strip().lower()
+        covered = tuple(
+            (name.text or "").strip().lower()
+            for name in key.iter("AttributeName")
+            if (name.text or "").strip()
+        )
+        keys[logical] = covered
+
+    return keys
+
+
+def check_alternate_keys(logical: str, table: Table, columns: set[str]) -> None:
+    """The keys a table carries, against the keys it is supposed to carry.
+
+    Both directions matter. A key that went missing takes the ingest's only real
+    defence against two asynchronous jobs writing the same event with it, and does
+    so silently — nothing else in a build would notice. A key nobody asked for is a
+    uniqueness constraint on a table this product writes, which is exactly the kind
+    of thing that fails at runtime on somebody else's data.
+    """
+    found = read_alternate_keys(ET.parse(SRC / "Entities" / table.folder / "Entity.xml").getroot())
+    if found != table.alternate_keys:
+        fail(
+            f"{logical}: the alternate keys drifted — found {sorted(found.items())}, "
+            f"expected {sorted(table.alternate_keys.items())}"
+        )
+
+    # A key naming a column the table does not have imports as nothing useful, and
+    # the packer says nothing about it.
+    lowered = {column.lower() for column in columns}
+    for key, covered in table.alternate_keys.items():
+        for column in covered:
+            if column not in lowered:
+                fail(f"{logical}: the alternate key {key!r} names {column!r}, which the table has no column for")
+
+
 def check_table(table: Table, declared: set[str]) -> None:
     folder = SRC / "Entities" / table.folder
     entity_file = folder / "Entity.xml"
@@ -381,6 +438,8 @@ def check_table(table: Table, declared: set[str]) -> None:
     if table.typed_columns is not None:
         check_column_shapes(logical, table, attributes)
 
+    check_alternate_keys(logical, table, columns)
+
     views = set()
     for query in root.iter("savedquery"):
         name = query.find("./LocalizedNames/LocalizedName")
@@ -394,7 +453,7 @@ def check_table(table: Table, declared: set[str]) -> None:
 
     print(
         f"  table {logical}: {table.ownership}, {len(columns)} columns, "
-        f"{len(views)} view(s), set {entity_set}"
+        f"{len(views)} view(s), {len(table.alternate_keys)} alternate key(s), set {entity_set}"
     )
 
 

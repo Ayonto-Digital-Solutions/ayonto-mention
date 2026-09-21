@@ -475,13 +475,16 @@ jobs:
           **\`ayonto_mentionevent\`**, the product's own event table, which is
           organization-owned.
 
-          **It does not send notifications.** There is no server-side ingest, no
-          dispatcher, no e-mail, Teams or in-app delivery in this package.
-          Selecting a mention writes the bound text and the companion metadata
-          onto the record being edited, and nothing else — it does **not** create
-          a row in either table, because the server-side step that would do that
-          is not implemented yet. Saving the record remains the only commit
-          boundary.
+          **It does not send notifications.** Selecting a mention writes the bound
+          text and the companion metadata onto the record being edited, and
+          nothing else — it does **not** create a row in either table. Saving the
+          record remains the only commit boundary.
+
+          **The server-side ingest is implemented in the repository, but it is not
+          in this package and no step is registered.** Nothing in this package
+          writes to either table, and there is no dispatcher and no e-mail, Teams
+          or in-app delivery. See \`server/README.md\` for what the ingest does and
+          what still has to happen in an environment before it can run.
 
           Solution version \`${SOLUTION_VERSION}\`, code component version
           \`${CONTROL_VERSION}\`. The two are versioned separately: a Dataverse
