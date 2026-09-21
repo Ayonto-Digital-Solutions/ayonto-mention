@@ -43,8 +43,9 @@ Keeping identity apart from text is what gives the control these properties:
 ## Current status
 
 Everything below is about the **client**. The server side does not exist yet —
-the 1.1.0.1 candidate adds the event table's *source* to the package, and nothing
-that reads or writes it.
+the event table's *source* has been in the package since v1.1.0.1, and nothing
+reads or writes it. The 1.1.0.2 candidate only corrects how that table's
+ownership is serialized.
 
 | Area | Status |
 |---|---|
@@ -62,8 +63,8 @@ that reads or writes it.
 | Automated tests and CI | ✅ implemented |
 | Suggestion popup portalled and positioned against the field, through Fluent's positioning: opens below, flips above where there is no room, stays inside the viewport, follows the field when a form pane scrolls | ✅ implemented in code — the flipping, shifting, scrolling and resizing are a browser's arithmetic and are checked in a real environment, not in the test suite |
 | Central `ayonto_mention` table packaged with the solution | ✅ from v1.1.0 — the table is installed by the import |
-| Organization-owned `ayonto_mentionevent` event table, solution and package source | ✅ in the 1.1.0.1 candidate — derived from the real legacy export, see [`powerplatform/README.md`](powerplatform/README.md) |
-| That table accepted by a real Dataverse environment | ⏳ pending — a package that builds is not a package that imports, and the managed import has not been run |
+| Organization-owned `ayonto_mentionevent` event table, solution and package source | ✅ shipped as solution source in v1.1.0.1 — derived from the real legacy export, see [`powerplatform/README.md`](powerplatform/README.md) |
+| That table accepted by a real Dataverse environment | ⏳ pending — v1.1.0.1 was imported into a real environment and the table was **rejected**: `0x80044150`, *Requested value 'OrganizationOwned' was not found*, because solution XML serializes that ownership model as `OrgOwned`. The 1.1.0.2 candidate fixes the serialization; nothing after that point of the import has been exercised yet |
 | Host-side ingest step, universal dispatcher, e-mail/Teams/in-app delivery | ⏳ planned, see [Roadmap](#roadmap) and [docs/server-architecture.md](docs/server-architecture.md) |
 
 **Selecting a mention does not send anything today, and does not write a row to
@@ -109,8 +110,9 @@ mention episode; one notification flow in its own central automation solution,
 shared by every host application rather than copied into each; delivery state
 kept per channel; and notification settings configured on the component itself.
 
-The event table's source now ships in the 1.1.0.1 candidate — packaged, not yet
-proven against a real Dataverse import — and nothing else in that list is built.
+The event table's source has shipped in the package since v1.1.0.1 — its ownership
+serialization corrected in the 1.1.0.2 candidate, and still not proven against a
+real Dataverse import — and nothing else in that list is built.
 How those component settings reach the server
 authoritatively is now decided: the server resolves the published control
 configuration from form metadata, per table and field, instead of trusting what a

@@ -300,11 +300,21 @@ def main() -> int:
         node.set("description", DESCRIPTION)
 
     text(entity, "EntitySetName", ENTITY_SET)
-    # UNVERIFIED against a real export: no public Dataverse export of an
-    # OrganizationOwned custom table exists to copy. Microsoft's table reference
-    # documents that such tables carry OrganizationId and none of the user or
-    # team ownership columns, which is what is done below.
-    text(entity, "OwnershipTypeMask", "OrganizationOwned")
+    # Two names for one thing, and the difference is not cosmetic. The Dataverse
+    # ownership model is called OrganizationOwned — that is the metadata and API
+    # name, and it is what this table is. Solution XML serializes that model as
+    # OrgOwned, which is the value written here.
+    #
+    # The real v1.1.0.1 managed import proved the distinction: it carried the
+    # raw value OrganizationOwned and Dataverse rejected the table outright with
+    # 0x80044150, "Requested value 'OrganizationOwned' was not found". The
+    # ownership model did not change; only its serialization was wrong.
+    #
+    # Still UNVERIFIED against a real export: no public Dataverse export of an
+    # organization-owned custom table exists to copy. Microsoft's table
+    # reference documents that such tables carry OrganizationId and none of the
+    # user or team ownership columns, which is what is done below.
+    text(entity, "OwnershipTypeMask", "OrgOwned")
 
     attributes = entity.find("attributes")
     templates: dict[str, ET.Element] = {}
@@ -426,7 +436,12 @@ def main() -> int:
 
     custom = sum(1 for a in attributes if a.findtext("IsCustomField") == "1")
     print(f"wrote {TARGET.relative_to(ROOT)}")
-    print(f"  {LOGICAL}: OrganizationOwned, {custom} custom column(s), {len(attributes)} total")
+    # OrganizationOwned is the ownership model; OrgOwned is how solution XML
+    # spells it. Both are said, so neither is mistaken for the other.
+    print(
+        f"  {LOGICAL}: OrganizationOwned (OwnershipTypeMask OrgOwned), "
+        f"{custom} custom column(s), {len(attributes)} total"
+    )
     return 0
 
 

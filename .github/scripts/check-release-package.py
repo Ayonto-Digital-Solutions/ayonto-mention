@@ -82,6 +82,11 @@ class PackagedTable(NamedTuple):
     schema: str
     logical: str
     entity_set: str
+    #: The raw <OwnershipTypeMask> value in the packaged solution XML. Dataverse
+    #: names the ownership model OrganizationOwned and serializes it as
+    #: OrgOwned; this is the serialized half. See `ownership` below.
+    ownership_mask: str
+    #: The ownership model's Dataverse name, for anything a person reads.
     ownership: str
     columns: frozenset[str]
     #: Exact view names, or None to require only that the table ships with one.
@@ -97,7 +102,8 @@ LEGACY_TABLE = PackagedTable(
     entity_set="ayonto_mentions",
     # UserOwned, exactly as exported. Ownership decides how row-level security
     # behaves, so a package that changed it would be a different table wearing
-    # the same name.
+    # the same name. Model and serialization are the same word for this one.
+    ownership_mask="UserOwned",
     ownership="UserOwned",
     columns=frozenset(
         {
@@ -131,6 +137,13 @@ LEDGER_TABLE = PackagedTable(
     # Organization-owned: a Mention Event is product and system state written
     # authoritatively by the server, not something owned by whoever edited the
     # business record.
+    #
+    # The model is OrganizationOwned; solution XML serializes it as OrgOwned.
+    # The v1.1.0.1 package carried the model's name as the raw value and the
+    # real managed import rejected the table with 0x80044150, "Requested value
+    # 'OrganizationOwned' was not found". The serialized value is what is
+    # checked, so no package leaves here with that mistake again.
+    ownership_mask="OrgOwned",
     ownership="OrganizationOwned",
     columns=frozenset(
         {
@@ -384,10 +397,11 @@ def check_table(table: PackagedTable, entity: ElementTree.Element) -> None:
         raise PackageError(f"{table.logical}: EntitySetName is {entity_set!r}, expected {table.entity_set!r}")
 
     ownership = described.findtext("OwnershipTypeMask")
-    if ownership != table.ownership:
+    if ownership != table.ownership_mask:
         raise PackageError(
-            f"{table.logical}: the table is {ownership!r}, expected {table.ownership!r} — ownership "
-            "decides how row-level security behaves and is not a packaging detail"
+            f"{table.logical}: the table is {ownership!r}, expected {table.ownership_mask!r} — "
+            "ownership decides how row-level security behaves and is not a packaging detail, "
+            f"and solution XML serializes the {table.ownership} model as {table.ownership_mask}"
         )
 
     columns = {
