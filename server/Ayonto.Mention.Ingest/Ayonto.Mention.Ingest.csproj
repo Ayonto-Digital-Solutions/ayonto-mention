@@ -1,0 +1,82 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Dataverse plug-in assembly for the Mention ingest.
+
+    Shaped after the project `pac plugin init` produces, and deliberately close to
+    it: SDK style, the three PrivateAssets package references, and the PowerApps
+    plug-in targets imported around them. Microsoft requires the SDK style for any
+    assembly that goes into a plug-in package — "All MSBuild projects where you add
+    the resulting compiled assembly to a plug-in package must use the 'SDK style'
+    format" — and the template is what that looks like.
+    https://learn.microsoft.com/power-apps/developer/data-platform/build-and-package
+
+    Two deliberate differences from the template.
+
+    net48 rather than net462. Plug-in assemblies must target .NET Framework, and
+    Dataverse supports 4.6.2 through 4.8 with 4.8 recommended for new work:
+    "sandbox support is now available for plug-ins and custom workflow activities
+    that target .NET Framework 4.8", and existing 4.6.2 projects keep working but
+    "you should update your existing code to target 4.8".
+    https://learn.microsoft.com/power-apps/developer/data-platform/supported-customizations
+    Microsoft.NETFramework.ReferenceAssemblies is what lets that compile on a build
+    agent without a Windows .NET Framework installation, which is how CI builds it.
+
+    No NuGet package on build. The plug-in MSBuild package defaults
+    GeneratePackageOnBuild to true, which is the dependent-assemblies route: the
+    assembly and anything it needs travel in one NuGet package uploaded to the
+    PluginPackage table. This ingest has no runtime dependency beyond what the
+    sandbox already has, and Microsoft's own rule is that "if your plug-in project
+    doesn't require any dependent assemblies at runtime other than what ships in
+    the Microsoft.CrmSdk.CoreAssemblies NuGet package, you don't need to create a
+    package" — so the switch stays off until something actually needs it, and the
+    repository does not carry a second version number nobody reads.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <PowerAppsTargetsPath>$(MSBuildExtensionsPath)\Microsoft\VisualStudio\v$(VisualStudioVersion)\PowerApps</PowerAppsTargetsPath>
+    <!--
+      Fixed, and not derived from the product version. Dataverse identifies a
+      registered plug-in assembly by name and version: raising this number makes
+      the next import a different assembly rather than an update of this one, and
+      every registered step would have to be pointed at it by hand. The version
+      that means something to a person is the solution version.
+    -->
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <ProjectTypeGuids>{4C25E9B5-9FA6-436c-8E19-B395D2A65FAF};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <RootNamespace>Ayonto.Mention.Ingest</RootNamespace>
+    <AssemblyName>Ayonto.Mention.Ingest</AssemblyName>
+    <!--
+      7.3 is the last language version that needs nothing from the runtime that
+      .NET Framework does not have. Records, init accessors and nullable reference
+      annotations all compile against attributes that live in .NET Core's base
+      class library, and reaching them from net48 means declaring compiler
+      internals by hand. A plug-in is not the place to do that.
+    -->
+    <LangVersion>7.3</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NeutralLanguage>en</NeutralLanguage>
+  </PropertyGroup>
+
+  <Import Project="$(PowerAppsTargetsPath)\Microsoft.PowerApps.VisualStudio.Plugin.props" Condition="Exists('$(PowerAppsTargetsPath)\Microsoft.PowerApps.VisualStudio.Plugin.props')" />
+
+  <ItemGroup>
+    <!--
+      The Dataverse SDK assemblies are reference-only on purpose: "the assemblies
+      themselves aren't uploaded with your plug-in assembly. They already exist in
+      the server's sandbox runtime where your code executes."
+    -->
+    <PackageReference Include="Microsoft.CrmSdk.CoreAssemblies" Version="9.0.2.60" PrivateAssets="All" />
+    <PackageReference Include="Microsoft.PowerApps.MSBuild.Plugin" Version="1.52.1" PrivateAssets="All" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="All" />
+  </ItemGroup>
+
+  <Import Project="$(PowerAppsTargetsPath)\Microsoft.PowerApps.VisualStudio.Plugin.targets" Condition="Exists('$(PowerAppsTargetsPath)\Microsoft.PowerApps.VisualStudio.Plugin.targets')" />
+
+</Project>

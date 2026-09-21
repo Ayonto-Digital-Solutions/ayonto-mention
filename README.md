@@ -42,10 +42,11 @@ Keeping identity apart from text is what gives the control these properties:
 
 ## Current status
 
-Everything below is about the **client**. The server side does not exist yet —
-the event table's *source* has been in the package since v1.1.0.1, and nothing
-reads or writes it. The 1.1.0.2 candidate only corrects how that table's
-ownership is serialized.
+Most of what follows is about the **client**. The server side has one piece now:
+the ingest that turns a saved record into event rows is implemented in code under
+[`server/`](server/README.md), with unit tests. It has never run — the assembly is
+not in the solution package, no step is registered anywhere, and no event row has
+been created in any environment. Nothing reads or writes either table yet.
 
 | Area | Status |
 |---|---|
@@ -65,14 +66,17 @@ ownership is serialized.
 | Central `ayonto_mention` table packaged with the solution | ✅ from v1.1.0 — the table is installed by the import |
 | Organization-owned `ayonto_mentionevent` event table, solution and package source | ✅ shipped as solution source in v1.1.0.1 — derived from the real legacy export, see [`powerplatform/README.md`](powerplatform/README.md) |
 | That table accepted by a real Dataverse environment | ⏳ pending — v1.1.0.1 was imported into a real environment and the table was **rejected**: `0x80044150`, *Requested value 'OrganizationOwned' was not found*, because solution XML serializes that ownership model as `OrgOwned`. The 1.1.0.2 candidate fixes the serialization; nothing after that point of the import has been exercised yet |
-| Host-side ingest step, universal dispatcher, e-mail/Teams/in-app delivery | ⏳ planned, see [Roadmap](#roadmap) and [docs/server-architecture.md](docs/server-architecture.md) |
+| Server-side ingest: a saved record becomes `ayonto_mentionevent` rows | ✅ implemented in code and unit-tested in [`server/`](server/README.md) — nothing has run it |
+| That assembly packaged with the solution | ⏳ blocked on a registration configuration only a Dataverse environment produces, see [`server/README.md`](server/README.md) |
+| The two ingest steps registered on a host table | ⏳ host-owned, and pending |
+| Universal dispatcher, e-mail/Teams/in-app delivery | ⏳ not started, see [Roadmap](#roadmap) and [docs/server-architecture.md](docs/server-architecture.md) |
 
 **Selecting a mention does not send anything today, and does not write a row to
 `ayonto_mention` either.** The control writes the text and the mention metadata
 as bound outputs. It writes nothing to Dataverse itself: its only Web API calls
 are a `systemuser` search and a single-user read. From v1.1.0 the package
-*installs* the table; what fills it is the server-side ingest, which does not
-exist yet.
+*installs* the table; what would fill it is the server-side ingest, whose code now
+exists but is neither packaged nor registered anywhere.
 
 ## How it works
 
@@ -97,11 +101,12 @@ The control exposes the text and the companion metadata as bound outputs. The
 server-side notification pipeline is designed to process those values only after
 the source record has been committed.
 
-**The server side is designed, not built.** Which solution owns which part of it,
-why the ingest is an asynchronous plug-in step registered by the host solution
-rather than a flow, and what a server may and may not believe about the companion
-column, are written down in
-[`docs/server-architecture.md`](docs/server-architecture.md).
+**The ingest is built; nothing downstream of it is.** Which solution owns which
+part of the server side, why the ingest is an asynchronous plug-in step registered
+by the host solution rather than a flow, and what a server may and may not believe
+about the companion column, are written down in
+[`docs/server-architecture.md`](docs/server-architecture.md); the code and the
+registration a host has to make are in [`server/README.md`](server/README.md).
 
 **Where it is going** is written down in the same file, under
 [Target architecture](docs/server-architecture.md#target-architecture): a
@@ -352,12 +357,13 @@ present in one environment, and a form can carry either.
 
 - the central `ayonto_mention` table, its view and its relationships
 
-**What it does not contain**, because it does not exist yet: the host-side
-ingest step, the dispatcher, e-mail, Teams and in-app delivery, and any delivery
-configuration or state. **Installing this release does not send notifications,
-and writes no rows into the table it installs.** The control records who was
-mentioned; turning that into a row, and that row into a message, is the
-server-side work still ahead.
+**What it does not contain**: the ingest assembly — implemented under
+[`server/`](server/README.md), and not packageable until a Dataverse environment has
+produced its registration configuration — the registered steps, the dispatcher,
+e-mail, Teams and in-app delivery, and any delivery configuration or state.
+**Installing this release does not send notifications, and writes no rows into the
+tables it installs.** The control records who was mentioned; turning that into a row,
+and that row into a message, is the server-side work still ahead.
 
 **What publishing v1.1.0 does and does not say.** The packages are built,
 checked and downloadable. It is not a statement that any environment has been
@@ -419,8 +425,11 @@ Running them from inside `pcf/` works too — there, use plain `npm ci`.
 ├── powerplatform/          # Dataverse solution project and source
 │   ├── AyontoMentionSolution.cdsproj
 │   └── src/                # classic SolutionPackager XML: Entities/, Other/
+├── server/                 # the Dataverse plug-in ingest, net48, and its tests
+│   ├── Ayonto.Mention.Ingest/
+│   └── Ayonto.Mention.Ingest.Tests/
 ├── docs/
-│   └── server-architecture.md   # the designed server side and who owns it
+│   └── server-architecture.md   # the server side, who owns it, and what is proven
 ├── CONTRIBUTING.md
 ├── SECURITY.md
 └── README.md
@@ -461,7 +470,9 @@ one the legacy solution exports, copied in unchanged. See
    [Target architecture](docs/server-architecture.md#target-architecture)
 5. Host-side ingest — asynchronous PostOperation plug-in steps that the host
    solution registers on its own source tables, against the plug-in type this
-   solution supplies. See [`docs/server-architecture.md`](docs/server-architecture.md)
+   solution supplies. The handler is **implemented and unit-tested** in
+   [`server/`](server/README.md); packaging the assembly and registering the steps
+   are both still ahead. See [`docs/server-architecture.md`](docs/server-architecture.md)
 6. Generic notification dispatcher for e-mail, Teams and in-app delivery
 7. Delivery channels and their configuration
 8. Integration, concurrency and solution-import testing

@@ -8,10 +8,18 @@ missing something. So the artifact itself is opened and read, and every claim
 made about it on the release page is checked here first.
 
 What this release is allowed to contain is deliberately narrow: the Ayonto
-Mention code component and the central `ayonto_mention` table, and nothing else.
-No flows, no plug-in assemblies, no connection references, no environment
-variables — those belong to a server side that does not exist yet, and a package
-that quietly grew one would be a far worse surprise than a failed build.
+Mention code component and the two tables, and nothing else. No flows, no
+connection references, no environment variables.
+
+The **plug-in assembly is the one component with a gate rather than a verdict.**
+The ingest exists in this repository, as a net48 assembly under `server/`, and the
+base solution is where it belongs — but a solution can only carry a plug-in
+assembly alongside the registration configuration that names it, and that
+configuration comes out of a real environment. So the expectation is written down
+here in full and switched off by `PLUGIN_ASSEMBLY_REQUIRED`: until it is on, a
+package carrying a plug-in assembly is refused and the refusal names the gate;
+once it is on, the package has to carry exactly this product's assembly and
+plug-in type and nothing else. See `server/README.md`.
 
 From v1.1.0 the table is **required**, not merely permitted. Up to v1.0.2 this
 file refused an Entities section outright, because the package was the client
@@ -63,9 +71,35 @@ LEGACY_CONTROL_SCHEMA_NAME = "ayonto_Ayonto.MentionControl"
 LEGACY_CONTROL_CONSTRUCTOR = "MentionControl"
 #: The second legacy control, which shares the publisher and must never be here.
 LEGACY_GROUP_CONTROL_SCHEMA_NAME = "ayonto_Ayonto.GroupDetailListControl"
-#: Type 66 is a custom control, type 1 an entity. See the solution component type table.
+#: Type 66 is a custom control, type 1 an entity, 90 a plug-in type and 91 a
+#: plug-in assembly. See the solution component type table.
 CUSTOM_CONTROL_COMPONENT_TYPE = "66"
 ENTITY_COMPONENT_TYPE = "1"
+PLUGIN_TYPE_COMPONENT_TYPE = "90"
+PLUGIN_ASSEMBLY_COMPONENT_TYPE = "91"
+
+#: Whether the package is expected to carry the server-side ingest assembly.
+#:
+#: **Off, and that is a statement about packaging rather than about the code.** The
+#: ingest is implemented and tested under `server/`; what is missing is the piece
+#: SolutionPackager needs in order to pack an assembly at all. Referencing the
+#: plug-in project from the solution project is the documented mechanism — `pac
+#: solution add-reference` writes it, and the solution targets then look for the
+#: assembly's registration configuration under `PluginAssemblies/` in the solution
+#: source. That configuration is an export artifact: it carries the PluginAssembly
+#: and PluginType identifiers a Dataverse environment assigned. Until the ingest has
+#: been registered in an environment and exported, there is nothing to pack, and
+#: hand-writing that XML is exactly the kind of invented table metadata this
+#: repository refuses to carry.
+#:
+#: Flip this to True in the same change that adds the registration configuration and
+#: the project reference. Nothing else about this file has to move.
+PLUGIN_ASSEMBLY_REQUIRED = False
+
+#: The assembly and the plug-in type this product would ship, named so that the
+#: check is about *which* assembly rather than about there being one.
+PLUGIN_ASSEMBLY_NAME = "Ayonto.Mention.Ingest"
+PLUGIN_TYPE_NAME = "Ayonto.Mention.Ingest.MentionIngestPlugin"
 
 #: The tables this package installs.
 #:
@@ -226,10 +260,12 @@ EXPECTED_FILES = frozenset(
 #: The table is not in this list and never was a file: SolutionPackager inlines
 #: entities into customizations.xml when it packs, so the database arrives as
 #: content rather than as a path. It is checked where it actually lives.
+#: `pluginassemblies/` is deliberately not in this list: plug-in content is judged
+#: by `check_plugin` below, which knows whether it is expected and which assembly it
+#: would have to be.
 FORBIDDEN_PATH_PARTS = (
     "workflows/",
     "webresources/",
-    "pluginassemblies/",
     "canvasapps/",
     "appmodules/",
     "connectionreferences",
@@ -241,12 +277,13 @@ FORBIDDEN_PATH_PARTS = (
 #: `Entities` and `EntityRelationships` left this list in v1.1.0: the first now
 #: carries the table, the second the six ownership relationships that come with
 #: it. Both are checked by content further down instead.
+#: `SolutionPluginAssemblies` left this list when the ingest was written: whether it
+#: may carry something is `check_plugin`'s question, not a constant's.
 MUST_BE_EMPTY = (
     "Workflows",
     "Roles",
     "Templates",
     "EntityMaps",
-    "SolutionPluginAssemblies",
     "EntityDataProviders",
 )
 
@@ -263,9 +300,18 @@ def _text(parent: ElementTree.Element, path: str) -> str:
 
 
 def check_solution_manifest(
-    solution_xml: bytes, version: str, managed: bool
+    solution_xml: bytes,
+    version: str,
+    managed: bool,
+    plugin_components: frozenset[tuple[str, str]] = frozenset(),
 ) -> None:
-    """The identity the package claims, against the identity it should have."""
+    """The identity the package claims, against the identity it should have.
+
+    `plugin_components` is what `check_plugin` decided the package's plug-in content
+    amounts to: empty while the gate is closed, and the assembly plus its plug-in
+    type once it is open. It arrives as an argument rather than being read again
+    here so that one function decides the plug-in question.
+    """
     root = ElementTree.fromstring(solution_xml)
     manifest = root.find("SolutionManifest")
     if manifest is None:
@@ -328,6 +374,7 @@ def check_solution_manifest(
     expected |= {
         (ENTITY_COMPONENT_TYPE, table.logical) for table in EXPECTED_TABLES if table.required
     }
+    expected |= set(plugin_components)
     # A table that is not required yet may still be declared — the release that
     # first ships it declares it before the flag above is flipped.
     optional = {
@@ -460,6 +507,127 @@ def check_table(table: PackagedTable, entity: ElementTree.Element) -> None:
         )
 
 
+def check_plugin(
+    names: list[str],
+    solution_xml: bytes,
+    customizations_xml: bytes,
+    required: bool = PLUGIN_ASSEMBLY_REQUIRED,
+) -> tuple[frozenset[str], frozenset[tuple[str, str]]]:
+    """Decides the plug-in question once, for the files, the manifest and the XML.
+
+    Returns the package paths that the plug-in legitimately accounts for, and the
+    root components the manifest is then expected to declare — so the allowlist and
+    the manifest check can both be told the answer rather than each guessing at it.
+
+    While the gate is closed the answer is "none of it", and the refusal says why
+    rather than only that: an assembly reaching a package before its registration
+    configuration exists means the solution source grew hand-written PluginAssembly
+    XML, which is the failure mode worth naming.
+
+    Once the gate is open the question becomes *which* assembly. A plug-in assembly
+    is code that runs with the privileges of whoever registered it, so a package
+    that carries one nobody named is a worse surprise than a package that carries
+    none.
+    """
+    plugin_paths = frozenset(
+        name for name in names if name.lower().startswith("pluginassemblies/")
+    )
+
+    customizations = ElementTree.fromstring(customizations_xml)
+    declared_assemblies = customizations.findall("SolutionPluginAssemblies/PluginAssembly")
+
+    solution = ElementTree.fromstring(solution_xml)
+    manifest = solution.find("SolutionManifest")
+    if manifest is None:
+        raise PackageError("no SolutionManifest in solution.xml")
+    plugin_roots = {
+        (component.get("type"), component.get("schemaName"))
+        for component in manifest.findall("RootComponents/RootComponent")
+        if component.get("type") in (PLUGIN_ASSEMBLY_COMPONENT_TYPE, PLUGIN_TYPE_COMPONENT_TYPE)
+    }
+
+    if not required:
+        if plugin_paths or declared_assemblies or plugin_roots:
+            raise PackageError(
+                "the package carries plug-in content, and this release is not supposed "
+                f"to: the ingest assembly {PLUGIN_ASSEMBLY_NAME!r} can only be packed "
+                "alongside a registration configuration exported from a real "
+                "environment, and PLUGIN_ASSEMBLY_REQUIRED is still False. If the "
+                "registration now exists, that flag and the solution project's "
+                "reference are the deliberate change — not a package that grew an "
+                "assembly on its own"
+            )
+        return frozenset(), frozenset()
+
+    if not plugin_paths:
+        raise PackageError(
+            f"the package carries no plug-in assembly, and {PLUGIN_ASSEMBLY_NAME!r} is "
+            "expected in it"
+        )
+
+    foreign = sorted(
+        path
+        for path in plugin_paths
+        if PLUGIN_ASSEMBLY_NAME.lower() not in path.lower()
+    )
+    if foreign:
+        raise PackageError(
+            f"the package carries the plug-in file {foreign[0]!r}, which is not part of "
+            f"{PLUGIN_ASSEMBLY_NAME!r} — a plug-in assembly runs with the privileges of "
+            "whoever registered it, and this solution ships exactly one"
+        )
+
+    assembly_names = sorted(
+        (assembly.findtext("Name") or "") for assembly in declared_assemblies
+    )
+    if assembly_names != [PLUGIN_ASSEMBLY_NAME]:
+        raise PackageError(
+            f"customizations.xml declares the plug-in assemblies {assembly_names}, "
+            f"expected exactly [{PLUGIN_ASSEMBLY_NAME!r}]"
+        )
+
+    types = sorted(
+        (plugin_type.findtext("TypeName") or "")
+        for assembly in declared_assemblies
+        for plugin_type in assembly.iter("PluginType")
+    )
+    if types != [PLUGIN_TYPE_NAME]:
+        raise PackageError(
+            f"the packaged assembly declares the plug-in types {types}, expected "
+            f"exactly [{PLUGIN_TYPE_NAME!r}] — the ingest is one handler, and a type "
+            "nobody named is a handler nobody reviewed"
+        )
+
+    # Steps belong to the host solution, not to this one. "Sdk Message Processing
+    # Steps are also solution components and must also be added to an unmanaged
+    # solution in order to be distributed" — and the step this ingest needs names a
+    # customer's own table, which a reusable base solution must never contain.
+    steps = [
+        step
+        for assembly in declared_assemblies
+        for step in assembly.iter("SdkMessageProcessingStep")
+    ]
+    if steps:
+        raise PackageError(
+            "the package carries an SDK message processing step. A step names the host "
+            "table it is registered against, and that belongs to the host solution — "
+            "this one is reusable and must not contain a customer's table name"
+        )
+
+    expected_roots = {
+        (PLUGIN_ASSEMBLY_COMPONENT_TYPE, PLUGIN_ASSEMBLY_NAME),
+        (PLUGIN_TYPE_COMPONENT_TYPE, PLUGIN_TYPE_NAME),
+    }
+    if plugin_roots != expected_roots:
+        raise PackageError(
+            f"the plug-in root components are wrong — missing "
+            f"{sorted(expected_roots - plugin_roots)}, unexpected "
+            f"{sorted(plugin_roots - expected_roots)}"
+        )
+
+    return plugin_paths, frozenset(expected_roots)
+
+
 def check_customizations(customizations_xml: bytes) -> None:
     """One code component, the tables this release installs, and none of the things a server side would add."""
     root = ElementTree.fromstring(customizations_xml)
@@ -560,13 +728,23 @@ def check_package(path: str, version: str, control_version: str, managed: bool) 
             if duplicates:
                 raise PackageError(f"package lists {sorted(duplicates)[0]!r} twice")
 
+            solution_xml = package.read("solution.xml")
+            customizations_xml = package.read("customizations.xml")
+            plugin_paths, plugin_components = check_plugin(
+                names, solution_xml, customizations_xml
+            )
+
             present = set(names)
             missing = EXPECTED_FILES - present
             if missing:
                 raise PackageError(
                     f"missing from the package: {', '.join(sorted(missing))}"
                 )
-            unexpected = present - EXPECTED_FILES
+            # The plug-in's own files cannot be named exactly: SolutionPackager puts
+            # them under a folder carrying the assembly's identifier. They are
+            # accounted for by `check_plugin`, which has already established that
+            # every one of them belongs to this product's assembly.
+            unexpected = present - EXPECTED_FILES - plugin_paths
             if unexpected:
                 raise PackageError(
                     f"package contains {', '.join(sorted(unexpected))}, which this "
@@ -587,8 +765,8 @@ def check_package(path: str, version: str, control_version: str, managed: bool) 
 
             control_root = f"Controls/{CONTROL_SCHEMA_NAME}/"
 
-            check_solution_manifest(package.read("solution.xml"), version, managed)
-            check_customizations(package.read("customizations.xml"))
+            check_solution_manifest(solution_xml, version, managed, plugin_components)
+            check_customizations(customizations_xml)
             check_control_manifest(
                 package.read(control_root + "ControlManifest.xml"), control_version
             )

@@ -260,7 +260,18 @@ changed to avoid taking that test.
 
 No flows, no plug-in assemblies, no SDK message processing steps, no connection
 references, no environment variables, no security roles. The import asks for no
-connection, because nothing in it needs one. The server side described in
-[`../docs/server-architecture.md`](../docs/server-architecture.md) is designed
-and unbuilt; this package installs the table it will eventually write to, and
-nothing writes to it yet.
+connection, because nothing in it needs one.
+
+**The missing plug-in assembly is a packaging gate rather than missing code.** The
+server-side ingest is implemented and unit-tested in [`../server`](../server/README.md),
+and this solution is where its assembly belongs. It is not here because
+SolutionPackager will not pack an assembly without the registration configuration
+that names it, and that configuration is an export artifact from an environment where
+the assembly has been registered. The exact error, and the ordered list of what
+unblocks it, are in [`../server/README.md`](../server/README.md). Hand-writing that
+XML is the other way through, and it is the one the rule above refuses.
+
+So: this package installs the table the ingest writes to, and carries nothing that
+writes to it. The dispatcher and every delivery channel in
+[`../docs/server-architecture.md`](../docs/server-architecture.md) remain designed
+and unbuilt.

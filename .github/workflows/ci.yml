@@ -70,3 +70,43 @@ jobs:
       # thing they are checking.
       - name: Check the version contract
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+
+  # The server-side ingest, built and tested on every pull request.
+  #
+  # A separate job on Windows, and the reason is the framework rather than a
+  # preference. A Dataverse plug-in assembly has to target .NET Framework — the
+  # sandbox runs nothing else — and .NET Framework has no runtime outside Windows,
+  # so a net48 test assembly cannot execute on the Ubuntu runner the rest of this
+  # workflow uses. `dotnet test` there asks for Mono and stops.
+  #
+  # The alternative was to test the same sources on a modern runtime, which would
+  # mean taking the Dataverse SDK from a package whose dependency tree currently
+  # carries a known high-severity advisory. Testing the assembly that actually
+  # ships, on the framework it actually runs on, is worth one runner.
+  server:
+    name: Build and test the server ingest
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      # Pinned to the same SDK the release workflow builds the solution with, so
+      # that a compiler that moved cannot make the pull request and the release
+      # two different builds.
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.401'
+
+      # The test project references the plug-in project, so both are restored and
+      # both are built. Nothing here contacts a Dataverse: everything the ingest
+      # needs from the platform is behind an interface, and the fakes implement it.
+      - name: Restore
+        run: dotnet restore server/Ayonto.Mention.Ingest.Tests/Ayonto.Mention.Ingest.Tests.csproj
+
+      - name: Build
+        run: dotnet build server/Ayonto.Mention.Ingest.Tests/Ayonto.Mention.Ingest.Tests.csproj -c Release --no-restore
+
+      - name: Test
+        run: dotnet test server/Ayonto.Mention.Ingest.Tests/Ayonto.Mention.Ingest.Tests.csproj -c Release --no-build
