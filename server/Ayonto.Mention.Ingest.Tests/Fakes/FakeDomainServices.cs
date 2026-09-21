@@ -82,6 +82,13 @@ namespace Ayonto.Mention.Ingest.Tests.Fakes
             return this;
         }
 
+        /// <summary>A real, enabled account that is not a person to notify.</summary>
+        public FakeRecipientDirectory WithIneligible(Guid userId)
+        {
+            _users[userId] = RecipientStatus.Ineligible;
+            return this;
+        }
+
         public RecipientResolution Resolve(Guid userId)
         {
             LookedUp.Add(userId);
@@ -98,6 +105,8 @@ namespace Ayonto.Mention.Ingest.Tests.Fakes
                     return RecipientResolution.Active();
                 case RecipientStatus.Disabled:
                     return RecipientResolution.Disabled();
+                case RecipientStatus.Ineligible:
+                    return RecipientResolution.Ineligible();
                 default:
                     return RecipientResolution.Unknown();
             }

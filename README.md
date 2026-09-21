@@ -116,9 +116,12 @@ mention episode; one notification flow in its own central automation solution,
 shared by every host application rather than copied into each; delivery state
 kept per channel; and notification settings configured on the component itself.
 
-The event table's source has shipped in the package since v1.1.0.1 — its ownership
-serialization corrected in the 1.1.0.2 candidate, and still not proven against a
-real Dataverse import — and nothing else in that list is built.
+The event table has shipped in the package since v1.1.0.1 and was **imported and
+accepted** by a real environment as part of `v1.1.0.2` managed, once its ownership
+serialization was corrected. From `1.1.0.3` it also carries the alternate key that
+makes one event identifier name one row, and that key is newer than the import.
+
+Of the rest of that list, the ingest is built and nothing downstream of it is.
 How those component settings reach the server
 authoritatively is now decided: the server resolves the published control
 configuration from form metadata, per table and field, instead of trusting what a
@@ -295,8 +298,14 @@ debounced while typing. It excludes:
 
 An organisation whose configuration refuses to filter on those columns is not left
 without a lookup: the query is retried without them and the accounts are removed
-from the result instead. Mailbox validation belongs to the designed notification
-pipeline and is not implemented yet.
+from the result instead.
+
+**The server enforces the same eligibility, and does not take the client's word for
+it.** The ingest resolves the claimed recipient against `systemuser` itself — in the
+context of the user whose save produced the claim, because that resolution is an
+authorization — and refuses a disabled user, an application user and those two access
+modes. Whether a mailbox exists is a delivery question and belongs to the dispatcher,
+which is not implemented; Teams and in-app notification need no mailbox at all.
 
 ## Installation
 

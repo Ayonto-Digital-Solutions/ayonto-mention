@@ -108,13 +108,44 @@ namespace Ayonto.Mention.Ingest.Tests
             Assert.Empty(service.Queries);
         }
 
+        /// <summary>
+        /// A `systemuser` row the way the directory reads one: enabled, a person, and an
+        /// ordinary access mode unless a test says otherwise.
+        /// </summary>
+        private static Entity User(
+            Guid id,
+            bool? disabled = false,
+            object applicationId = null,
+            object accessMode = null)
+        {
+            var row = new Entity("systemuser", id);
+            if (disabled.HasValue)
+            {
+                row["isdisabled"] = disabled.Value;
+            }
+            if (applicationId != null)
+            {
+                row["applicationid"] = applicationId;
+            }
+
+            // 0 is Read-Write. Present unless a test removes it, because the directory
+            // needs it for the decision and refuses without it.
+            row["accessmode"] = accessMode ?? new OptionSetValue(0);
+            return row;
+        }
+
+        private static RecipientStatus Resolve(Entity row, Guid id)
+        {
+            return new SystemUserDirectory(new FakeOrganizationService().Answer("systemuser", row))
+                .Resolve(id)
+                .Status;
+        }
+
         [Fact]
         public void a_recipient_is_resolved_against_systemuser_by_identifier()
         {
             var user = new Guid("3f2504e0-4f89-41d3-9a0c-0305e82c3301");
-            var row = new Entity("systemuser", user);
-            row["isdisabled"] = false;
-            var service = new FakeOrganizationService().Answer("systemuser", row);
+            var service = new FakeOrganizationService().Answer("systemuser", User(user));
 
             RecipientResolution resolution = new SystemUserDirectory(service).Resolve(user);
 
@@ -122,9 +153,73 @@ namespace Ayonto.Mention.Ingest.Tests
             QueryExpression query = Assert.Single(service.Queries);
             Assert.Equal("systemuser", query.EntityName);
             Assert.Equal(user, ValueOf(query, "systemuserid"));
-            // Only what is needed: not a name, not an address, because nothing
+            // Only what the decision needs: not a name, not an address, because nothing
             // downstream may take a recipient's identity from either.
-            Assert.Equal(new[] { "isdisabled" }, query.ColumnSet.Columns);
+            Assert.Equal(
+                new[] { "isdisabled", "applicationid", "accessmode" },
+                query.ColumnSet.Columns);
+        }
+
+        [Fact]
+        public void an_application_user_is_an_identity_for_code_and_is_refused()
+        {
+            var user = Guid.NewGuid();
+
+            Assert.Equal(
+                RecipientStatus.Ineligible,
+                Resolve(User(user, applicationId: Guid.NewGuid()), user));
+            // However the platform hands the value over.
+            Assert.Equal(
+                RecipientStatus.Ineligible,
+                Resolve(User(user, applicationId: Guid.NewGuid().ToString("D")), user));
+        }
+
+        [Fact]
+        public void an_empty_application_id_is_not_an_application_user()
+        {
+            var user = Guid.NewGuid();
+
+            Assert.Equal(RecipientStatus.Active, Resolve(User(user, applicationId: Guid.Empty), user));
+        }
+
+        [Theory]
+        [InlineData(3)]
+        [InlineData(4)]
+        public void the_access_modes_that_are_not_people_are_refused(int accessMode)
+        {
+            // 3 is Support User and 4 is Non-interactive. The same two the control's own
+            // lookup excludes, so a person the editor could never have picked cannot
+            // become a recipient because a payload named them.
+            var user = Guid.NewGuid();
+
+            Assert.Equal(
+                RecipientStatus.Ineligible,
+                Resolve(User(user, accessMode: new OptionSetValue(accessMode)), user));
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(1)]
+        [InlineData(2)]
+        [InlineData(5)]
+        public void the_ordinary_access_modes_stay_notifiable(int accessMode)
+        {
+            var user = Guid.NewGuid();
+
+            Assert.Equal(
+                RecipientStatus.Active,
+                Resolve(User(user, accessMode: new OptionSetValue(accessMode)), user));
+        }
+
+        [Fact]
+        public void an_access_mode_that_cannot_be_read_refuses_rather_than_defaults()
+        {
+            var user = Guid.NewGuid();
+            Entity row = User(user);
+            row.Attributes.Remove("accessmode");
+
+            Assert.Equal(RecipientStatus.Unknown, Resolve(row, user));
+            Assert.Equal(RecipientStatus.Unknown, Resolve(User(user, accessMode: "3"), user));
         }
 
         [Fact]
@@ -139,11 +234,8 @@ namespace Ayonto.Mention.Ingest.Tests
         public void a_disabled_recipient_gets_no_new_notification_event()
         {
             var user = Guid.NewGuid();
-            var row = new Entity("systemuser", user);
-            row["isdisabled"] = true;
-            var service = new FakeOrganizationService().Answer("systemuser", row);
 
-            Assert.Equal(RecipientStatus.Disabled, new SystemUserDirectory(service).Resolve(user).Status);
+            Assert.Equal(RecipientStatus.Disabled, Resolve(User(user, disabled: true), user));
         }
 
         [Fact]
@@ -154,31 +246,26 @@ namespace Ayonto.Mention.Ingest.Tests
             // Reading that silence as "not disabled" would notify on the strength of a
             // value nobody saw.
             var user = Guid.NewGuid();
-            var service = new FakeOrganizationService().Answer("systemuser", new Entity("systemuser", user));
 
-            Assert.Equal(RecipientStatus.Unknown, new SystemUserDirectory(service).Resolve(user).Status);
+            Assert.Equal(RecipientStatus.Unknown, Resolve(User(user, disabled: null), user));
         }
 
         [Fact]
         public void a_disabled_flag_that_is_not_a_boolean_is_refused_too()
         {
             var user = Guid.NewGuid();
-            var row = new Entity("systemuser", user);
+            Entity row = User(user, disabled: null);
             row["isdisabled"] = "false";
-            var service = new FakeOrganizationService().Answer("systemuser", row);
 
-            Assert.Equal(RecipientStatus.Unknown, new SystemUserDirectory(service).Resolve(user).Status);
+            Assert.Equal(RecipientStatus.Unknown, Resolve(row, user));
         }
 
         [Fact]
-        public void an_enabled_recipient_is_active()
+        public void an_enabled_person_with_an_ordinary_access_mode_is_active()
         {
             var user = Guid.NewGuid();
-            var row = new Entity("systemuser", user);
-            row["isdisabled"] = false;
-            var service = new FakeOrganizationService().Answer("systemuser", row);
 
-            Assert.Equal(RecipientStatus.Active, new SystemUserDirectory(service).Resolve(user).Status);
+            Assert.Equal(RecipientStatus.Active, Resolve(User(user), user));
         }
 
         [Fact]

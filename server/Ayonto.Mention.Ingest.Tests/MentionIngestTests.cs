@@ -319,6 +319,24 @@ namespace Ayonto.Mention.Ingest.Tests
         }
 
         [Fact]
+        public void an_account_that_is_not_a_person_gets_no_event()
+        {
+            // An application user, a support account or a non-interactive one. Real,
+            // enabled, and nobody who reads a message.
+            Guid user = Guid.NewGuid();
+            _recipients.WithIneligible(user);
+
+            IngestOutcome outcome = Run(Create(Payloads.Image(
+                Field, Text,
+                MetadataField, Payloads.Metadata(Field, Payloads.Mention(Payloads.NewId(), Canonical(user), AlexAt, 12)))));
+
+            Assert.Equal(0, outcome.Created);
+            Assert.Equal(1, outcome.RecipientsRefused);
+            Assert.Empty(_ledger.Rows);
+            Assert.True(_trace.Said("Ineligible"));
+        }
+
+        [Fact]
         public void a_field_with_no_published_configuration_creates_nothing()
         {
             Guid user = Recipient();

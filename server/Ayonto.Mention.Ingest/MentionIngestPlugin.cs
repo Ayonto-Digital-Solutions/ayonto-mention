@@ -127,14 +127,36 @@ namespace Ayonto.Mention.Ingest
                 Read(postImage, configuration, includeSourceText: true),
                 isUpdate ? Read(preImage, configuration, includeSourceText: false) : null);
 
-            // null is SYSTEM, and it is what lets an ordinary user save a host record
-            // without holding Create on the ledger. Every validation the ingest performs
-            // happens before anything is written with it.
+            // Two services, and which is which is the security design rather than a
+            // detail. "When called in a plug-in, a `null` value indicates the SYSTEM user
+            // and a `Guid.Empty` value indicates the same user as
+            // IPluginExecutionContext.UserId. Any other value indicates a specific system
+            // user."
+            // https://learn.microsoft.com/dotnet/api/microsoft.xrm.sdk.iorganizationservicefactory.createorganizationservice
+            //
+            // SYSTEM carries the two operations that are about product state: reading the
+            // published form configuration, and writing the ledger. The ledger write needs
+            // it — an ordinary user must be able to save a host record without holding
+            // Create on the event table — and the configuration read needs it so that the
+            // same mention on the same field resolves the same way whoever pressed save.
+            // Neither returns anything to anybody.
+            //
+            // The recipient is resolved as the **initiating user**, because that
+            // resolution is an authorization. Anybody who may write the source text may
+            // write any identifier into the companion column, and SYSTEM would happily
+            // confirm a user the person saving the record has no business naming. Asked in
+            // their context, a recipient they cannot see does not resolve and no event is
+            // created.
+            //
+            // InitiatingUserId rather than UserId: the actor is whoever caused the
+            // operation, and a step registered to run as somebody else must not widen what
+            // that actor is allowed to reach.
             IOrganizationService system = factory.CreateOrganizationService(null);
+            IOrganizationService initiatingUser = factory.CreateOrganizationService(context.InitiatingUserId);
 
             var ingest = new MentionIngest(
                 new NotificationConfigurationResolver(new SystemFormSource(system)),
-                new SystemUserDirectory(system),
+                new SystemUserDirectory(initiatingUser),
                 new MentionEventLedger(system),
                 trace);
 

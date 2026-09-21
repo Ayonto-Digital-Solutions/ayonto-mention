@@ -44,19 +44,33 @@ namespace Ayonto.Mention.Ingest.Tests.Fakes
     }
 
     /// <summary>
-    /// The service factory, which records the user the service was asked for.
+    /// The service factory, which records the user each service was asked for and can
+    /// hand out a different one per context.
     ///
-    /// That argument is the whole of the SYSTEM decision: `null` "indicates the SYSTEM
-    /// user", and a test asserting it is asserting that the authoritative ledger write
-    /// does not borrow the calling user's privileges.
+    /// That argument is the whole of the privilege design: `null` "indicates the SYSTEM
+    /// user", and any other value a specific user. Handing back two distinguishable
+    /// services is what lets a test prove *which* operation ran under which identity,
+    /// rather than only that SYSTEM was asked for at some point.
     /// </summary>
     public sealed class FakeOrganizationServiceFactory : IOrganizationServiceFactory
     {
-        private readonly IOrganizationService _service;
+        private readonly IOrganizationService _system;
+        private readonly IOrganizationService _asUser;
 
+        /// <summary>One service for everything, for the tests that do not care.</summary>
         public FakeOrganizationServiceFactory(IOrganizationService service)
+            : this(service, null)
         {
-            _service = service;
+        }
+
+        /// <summary>
+        /// A SYSTEM service and a caller-context one. `asUser` answers every request that
+        /// names a user; null falls back to the SYSTEM service.
+        /// </summary>
+        public FakeOrganizationServiceFactory(IOrganizationService system, IOrganizationService asUser)
+        {
+            _system = system;
+            _asUser = asUser;
         }
 
         /// <summary>The user ids the plug-in asked for a service as, in order.</summary>
@@ -65,7 +79,12 @@ namespace Ayonto.Mention.Ingest.Tests.Fakes
         public IOrganizationService CreateOrganizationService(Guid? userId)
         {
             AskedFor.Add(userId);
-            return _service;
+            if (userId == null)
+            {
+                return _system;
+            }
+
+            return _asUser ?? _system;
         }
     }
 }

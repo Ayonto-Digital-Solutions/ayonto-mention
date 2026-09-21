@@ -65,8 +65,15 @@ The handler then has to hear the refusal rather than fail the job over it:
 | Create refused with | Meaning | What the ingest does |
 |---|---|---|
 | `DuplicateRecordEntityKey` `0x80060892` | "Entity Key {0} violated. A record with the same value for {1} already exists." | re-read, then the ordinary rule |
-| `CrmSQLUniqueIndexOrConstraintViolation` `0x80073002` | the same condition from the storage layer | re-read, then the ordinary rule |
-| anything else | a privilege error, a timeout, an unexpected fault | **propagates** to the system job |
+| `CrmSQLUniqueIndexOrConstraintViolation` `0x80073002` | *some* unique index or constraint was violated | **propagates** |
+| anything else | a privilege error, a timeout, an unexpected fault | **propagates** |
+
+One code, and it is the specific one. `0x80073002` is deliberately not treated as
+idempotency: it says only that some unique constraint was violated, which is a
+broader statement than "this event identifier is taken", and reading it as the
+narrower one would let a genuine storage problem end a system job successfully having
+recorded nothing. Whether a real race on this key can surface that way instead is a
+question only a real environment can answer, and it is listed as one below.
 
 Re-reading and applying the same rule is what keeps the outcome identical whoever
 won the race: the same identity is a replay, a different one is `event_id_conflict`.
@@ -98,27 +105,50 @@ resulting token, so regenerating the key is allowed and doing it unnoticed is no
 Ayonto.Mention.Ingest, Version=1.0.0.0, Culture=neutral, PublicKeyToken=0e66244ba4f12435
 ```
 
-### Everything is read as SYSTEM, deliberately
+### Two services, and which is which is the security design
 
-The plug-in opens one service, `CreateOrganizationService(null)` — documented as
-*"a `null` value indicates the SYSTEM user"*, where `Guid.Empty` would have meant
-*"the same user as `IPluginExecutionContext.UserId`"*. The ledger write needs it: an
-ordinary user must be able to save a host record without holding `Create` on the
-ledger.
+The plug-in opens exactly two, and the difference between them is what separates
+resolving a recipient from authorizing one.
 
-The two resolution reads use it as well, and that is a decision rather than
-convenience. Form metadata and a recipient's state are **product** state, and
-reading them through the saving user's context would scope them to that user's
-security roles. The same mention, on the same field, would then resolve a
-configuration for one colleague and none for another, or find a recipient in one
-business unit and not in another — and the difference would be frozen into a durable
-row that somebody else is notified from. A notification silently lost because of who
-pressed save is worse than a read that nobody can see the results of: nothing is
-returned to any user, and the reads only ever feed a row this product owns.
+| | Service | Why |
+|---|---|---|
+| `SystemFormSource` | `CreateOrganizationService(null)` — SYSTEM | The published configuration is **product** state. Read through the saving user's roles, the same field would resolve a configuration for one colleague and none for another, and the difference would be frozen into a durable row somebody else is notified from |
+| `MentionEventLedger` | SYSTEM | An ordinary user must be able to save a host record without holding `Create` on the event table. This is the privilege the whole design exists to take away from them |
+| `SystemUserDirectory` | `CreateOrganizationService(context.InitiatingUserId)` | **The recipient lookup is an authorization**, not a lookup |
 
-Open for a real environment: whether the calling user's context would in fact have
-sufficed for both reads. Until that is observed, the deterministic choice is the one
-that is made.
+That last row is the point. Anybody who may write the source text may write any
+identifier into the companion column, so "is this a real, enabled user" is only half
+the question — "may the person who saved this record name that user at all" is the
+rest of it, and SYSTEM would answer yes to both for anybody in the environment. Asked
+in the initiating user's context, a recipient they cannot see simply does not resolve,
+and no event is created.
+
+`InitiatingUserId` rather than `UserId`: the documented difference is that `null`
+"indicates the SYSTEM user" and `Guid.Empty` "the same user as
+`IPluginExecutionContext.UserId`". The actor is whoever caused the operation, and a
+step registered to run as somebody else must not widen what that actor can reach.
+
+### What makes somebody a recipient
+
+The server is the authority, and it enforces the same eligibility the control's own
+lookup does rather than trusting that the lookup was used at all:
+
+| | |
+|---|---|
+| resolvable in the initiating user's context | else **Unknown** |
+| `isdisabled` is `false` | missing or unreadable → **Unknown**; `true` → **Disabled** |
+| no `applicationid` | an application user is an identity for code → **Ineligible** |
+| `accessmode` is neither 3 nor 4 | Support User and Non-interactive are not people → **Ineligible** |
+
+Every value the decision needs has to be readable; silence refuses rather than
+defaults. No e-mail address is read and none is required: whether a mailbox exists is
+a delivery question for the dispatcher, and Teams and in-app notification need none.
+
+The two access-mode numbers mirror
+`pcf/src/services/dataverseUserSearchService.ts`, deliberately rather than
+independently: a person the editor could never have picked must not become a recipient
+because a payload named them. Confirming the numeric mapping against a real
+environment's `systemuser_accessmode` choice is one of the proofs below.
 
 ### Why the tests run on Windows
 
@@ -327,9 +357,15 @@ Code and tests cannot answer any of these:
   created — the key is newer than the `v1.1.0.2` import that proved the table;
 - a genuine concurrent double save producing `DuplicateRecordEntityKey` and the
   handler converging on one row, which is the only way to confirm that error code
-  against a real platform rather than against a fake;
-- whether the saving user's own context would have sufficed for the two resolution
-  reads that currently run as SYSTEM.
+  against a real platform rather than against a fake — and whether such a race can
+  instead surface as `CrmSQLUniqueIndexOrConstraintViolation`, which is currently
+  treated as an unexpected fault;
+- that the initiating user's own context can read `systemuser` for an ordinary
+  recipient, and that a recipient outside their reach resolves to nothing rather than
+  to a fault;
+- that `systemuser_accessmode` really numbers Support User 3 and Non-interactive 4 in
+  a live environment, which is taken from the control's contract rather than from a
+  published choice table.
 
 Until those have run, this is an implementation of a decision — not a working
 notification pipeline.

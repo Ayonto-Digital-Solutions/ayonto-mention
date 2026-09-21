@@ -736,8 +736,12 @@ Each is validated, none is believed on its own:
 - an unknown `schemaVersion` is refused, never guessed at
 - `sourceField` is accepted only where it matches the step's own configuration —
   the mapping the host declared, not the value the payload asserts
-- `recipientUserId` is resolved against `systemuser` and checked for being a real,
-  enabled user before anything is written about them
+- `recipientUserId` is resolved against `systemuser` **in the context of the
+  initiating user**, and checked for being a real, enabled *person* — not disabled,
+  not an application user, and not one of the access modes that exist to run code —
+  before anything is written about them. The context is the point: resolving a
+  recipient and authorizing one are the same operation here, and SYSTEM would confirm
+  anybody in the environment
 - `occurrences` may be checked for structural sense against the text in the image,
   and may never authorize anything. They exist so a saved record can be reopened
   and read as people rather than characters
@@ -778,10 +782,19 @@ The handler then has to hear it. A create refused with `DuplicateRecordEntityKey
 (`0x80060892`) — "Entity Key {0} violated. A record with the same value for {1}
 already exists" — means another job got there first, so the ingest re-reads the
 ledger and applies the same two-line rule to what it finds: same identity is a
-replay, a different one is a conflict. Nothing else is caught. A privilege error, a
-timeout or an unexpected fault belongs to the system job, where somebody can see it;
-an ingest that read every fault as idempotency would report success for a
-notification it never recorded.
+replay, a different one is a conflict.
+
+**One code, and it is the specific one.** `CrmSQLUniqueIndexOrConstraintViolation`
+(`0x80073002`) says only that *some* unique index or constraint was violated, which
+is a broader statement than "this event identifier is taken". It is not treated as
+idempotency, because doing so would let a genuine storage problem end a system job
+successfully having recorded nothing. Whether a real race on this key can surface
+that way instead is a question for a real environment, and until it is answered the
+code propagates like any other unexpected fault.
+
+Nothing else is caught either. A privilege error, a timeout or an unexpected fault
+belongs to the system job, where somebody can see it; an ingest that read every fault
+as idempotency would report success for a notification it never recorded.
 
 ## Who may write the ledger
 
@@ -876,7 +889,15 @@ context applied to unvalidated input is worse than no elevation at all, because 
 launders a claim into a fact.
 
 Use it narrowly: for the Ayonto-owned operations that require it, and for nothing
-else.
+else. In the implementation that means two of the three, and the third is the one
+worth naming. Reading the **published form configuration** is SYSTEM, because that
+configuration is product state and must resolve identically whoever pressed save.
+Writing the **ledger** is SYSTEM, for the privilege reason above. Resolving the
+**recipient** is not: it runs as
+`CreateOrganizationService(IPluginExecutionContext.InitiatingUserId)`, because
+deciding who may be told about a record is an authorization and belongs to the actor
+who caused the operation. `InitiatingUserId` rather than `UserId`, so that a step
+registered to run as somebody else cannot widen what that actor reaches.
 
 **The actor is still the user.** `InitiatingUserId` from the execution context is
 the trusted identity of whoever caused the source-record operation, and that is

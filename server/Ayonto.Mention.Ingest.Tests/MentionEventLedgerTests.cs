@@ -51,7 +51,11 @@ namespace Ayonto.Mention.Ingest.Tests
         /// </summary>
         private const int DuplicateRecordEntityKey = unchecked((int)0x80060892);
 
-        /// <summary>`CrmSQLUniqueIndexOrConstraintViolation`, the same condition from storage.</summary>
+        /// <summary>
+        /// `CrmSQLUniqueIndexOrConstraintViolation` — "The operation attempted to insert a
+        /// duplicate value for an attribute with a unique constraint." Broader than this
+        /// key, and therefore **not** idempotency.
+        /// </summary>
         private const int UniqueConstraintViolation = unchecked((int)0x80073002);
 
         /// <summary>`PrivilegeDenied`. Nothing to do with idempotency, and must not be swallowed.</summary>
@@ -67,20 +71,35 @@ namespace Ayonto.Mention.Ingest.Tests
                 new MentionEventLedger(service).Create(Row(NotificationConfiguration.Silent)));
         }
 
-        [Theory]
-        [InlineData(unchecked((int)0x80060892))]
-        [InlineData(unchecked((int)0x80073002))]
-        public void the_event_identifier_being_taken_is_an_outcome_rather_than_a_failure(int errorCode)
+        [Fact]
+        public void the_event_identifier_being_taken_is_an_outcome_rather_than_a_failure()
         {
             // Two asynchronous jobs for one episode can both find nothing and both write.
             // The alternate key is what stops the second one, and this is the ingest
             // hearing it rather than failing the job over it.
-            var service = new FakeOrganizationService().RefusingCreate(errorCode);
+            var service = new FakeOrganizationService().RefusingCreate(DuplicateRecordEntityKey);
 
             Assert.Equal(
                 LedgerWriteOutcome.EventIdTaken,
                 new MentionEventLedger(service).Create(Row(NotificationConfiguration.Silent)));
             Assert.Empty(service.Created);
+        }
+
+        [Fact]
+        public void a_generic_unique_constraint_violation_is_not_treated_as_idempotency()
+        {
+            // 0x80073002 says only that *some* unique index or constraint was violated.
+            // Reading it as "the event identifier is taken" would let a genuine storage
+            // problem end a system job successfully, having recorded nothing. Whether a
+            // real race on this key can surface that way instead is a question only a real
+            // environment can answer.
+            var service = new FakeOrganizationService().RefusingCreate(UniqueConstraintViolation);
+
+            FaultException<OrganizationServiceFault> thrown =
+                Assert.Throws<FaultException<OrganizationServiceFault>>(
+                    () => new MentionEventLedger(service).Create(Row(NotificationConfiguration.Silent)));
+
+            Assert.Equal(UniqueConstraintViolation, thrown.Detail.ErrorCode);
         }
 
         [Fact]

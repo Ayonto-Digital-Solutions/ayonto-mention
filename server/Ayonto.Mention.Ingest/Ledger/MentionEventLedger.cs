@@ -39,17 +39,6 @@ namespace Ayonto.Mention.Ingest.Ledger
         /// </summary>
         private const int DuplicateRecordEntityKey = unchecked((int)0x80060892);
 
-        /// <summary>
-        /// `CrmSQLUniqueIndexOrConstraintViolation` — "The operation attempted to insert a
-        /// duplicate value for an attribute with a unique constraint."
-        ///
-        /// The same condition surfacing from the storage layer rather than from the key
-        /// validation above. Accepted as the same answer because the only unique
-        /// constraints on this table are its primary key, which the platform generates,
-        /// and the event identifier's key.
-        /// </summary>
-        private const int UniqueConstraintViolation = unchecked((int)0x80073002);
-
         private readonly IOrganizationService _service;
 
         public MentionEventLedger(IOrganizationService service)
@@ -146,12 +135,21 @@ namespace Ayonto.Mention.Ingest.Ledger
             catch (FaultException<OrganizationServiceFault> refused)
                 when (IsEventIdTaken(refused.Detail))
             {
-                // Narrow on purpose. Two error codes, both meaning "this identifier is
-                // already used", and nothing else is caught here: a privilege error, a
-                // missing column, a timeout and an unexpected fault all belong to the
-                // system job, where somebody can see them. An ingest that treated every
-                // fault as idempotency would report success for a notification it never
-                // recorded.
+                // One error code, and it is the specific one: the entity key that was
+                // violated is named in the message, and this table has exactly one.
+                //
+                // `CrmSQLUniqueIndexOrConstraintViolation` (0x80073002) is deliberately
+                // **not** here. It means only that some unique index or constraint was
+                // violated, which is a broader statement than "the event identifier is
+                // taken" — and treating it as idempotency would let a genuine storage
+                // problem end a system job successfully, having recorded nothing. It
+                // propagates like any other unexpected fault. Whether a real race on this
+                // key can surface that way instead is a question only a real environment
+                // can answer, and it is listed as one.
+                //
+                // Nothing else is caught either: a privilege error, a missing column, a
+                // timeout and an unexpected fault all belong to the system job, where
+                // somebody can see them.
                 return LedgerWriteOutcome.EventIdTaken;
             }
         }
@@ -164,7 +162,7 @@ namespace Ayonto.Mention.Ingest.Ledger
         {
             for (OrganizationServiceFault at = fault; at != null; at = at.InnerFault)
             {
-                if (at.ErrorCode == DuplicateRecordEntityKey || at.ErrorCode == UniqueConstraintViolation)
+                if (at.ErrorCode == DuplicateRecordEntityKey)
                 {
                     return true;
                 }

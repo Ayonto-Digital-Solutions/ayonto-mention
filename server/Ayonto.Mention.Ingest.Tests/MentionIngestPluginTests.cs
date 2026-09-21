@@ -37,6 +37,18 @@ namespace Ayonto.Mention.Ingest.Tests
             return new FakeServiceProvider(_context, _trace, _factory);
         }
 
+        /// <summary>
+        /// A `systemuser` row the ingest will accept: enabled, a person, and an ordinary
+        /// access mode. All three are read, and all three have to be there.
+        /// </summary>
+        private static Entity NotifiableUser(Guid id)
+        {
+            var row = new Entity("systemuser", id);
+            row["isdisabled"] = false;
+            row["accessmode"] = new OptionSetValue(0);
+            return row;
+        }
+
         private static Entity Image(params string[] columnsAndValues)
         {
             var image = new Entity(Table);
@@ -79,8 +91,7 @@ namespace Ayonto.Mention.Ingest.Tests
         {
             Guid user = Guid.NewGuid();
             string eventId = Payloads.NewId();
-            var userRow = new Entity("systemuser", user);
-            userRow["isdisabled"] = false;
+            Entity userRow = NotifiableUser(user);
             var form = new Entity("systemform", Guid.NewGuid());
             form["name"] = "Main";
             form["formxml"] = Forms.With(Field, Forms.EmailOnly());
@@ -112,38 +123,78 @@ namespace Ayonto.Mention.Ingest.Tests
         }
 
         [Fact]
-        public void the_ledger_is_written_as_system()
+        public void exactly_two_services_are_opened_system_and_the_initiating_user()
         {
-            // null is the SYSTEM user, which is what lets an ordinary user save a host
-            // record without holding Create on the ledger.
+            // The whole privilege design, in one assertion. `null` is SYSTEM; the other is
+            // the user who caused the save. Not `Guid.Empty`, which would be "the same
+            // user as IPluginExecutionContext.UserId" and would follow a step
+            // impersonation rather than the actor.
             _context.MessageName = "Create";
             WithImages(Image(Field, Text), null);
 
             Run();
 
-            Assert.Null(Assert.Single(_factory.AskedFor));
+            Assert.Equal(new Guid?[] { null, _context.InitiatingUserId }, _factory.AskedFor.ToArray());
+            Assert.DoesNotContain(Guid.Empty, _factory.AskedFor);
+            Assert.NotEqual(_context.InitiatingUserId, Guid.Empty);
         }
 
         [Fact]
-        public void one_service_is_opened_and_it_is_system_for_the_resolution_reads_too()
+        public void the_recipient_is_resolved_as_the_initiating_user_and_everything_else_as_system()
         {
-            // Deliberate, and the reason is consistency rather than convenience. Form
-            // metadata and the recipient's state are product state, and reading them
-            // through the saving user's context would scope them to that user's roles:
-            // the same mention on the same field would resolve a configuration for one
-            // colleague and none for another, or find a recipient in one business unit
-            // and not in another. The event row is durable and shared, so what goes into
-            // it must not depend on who happened to press save.
+            // Two distinguishable services, so this is about *which* operation ran under
+            // which identity rather than about SYSTEM being asked for at some point.
             //
-            // Nothing is returned to anybody: the reads feed a row this product owns.
-            // Guid.Empty — "the same user as IPluginExecutionContext.UserId" — is what
-            // this test asserts is *not* asked for.
+            // The recipient lookup is an authorization: anybody who may write the source
+            // text may write any identifier into the companion column, and SYSTEM would
+            // confirm a user the person saving the record has no business naming. The form
+            // configuration and the ledger are product state and stay SYSTEM — the first so
+            // that the same field resolves the same way whoever pressed save, the second so
+            // that an ordinary user needs no Create on the event table.
             Guid user = Guid.NewGuid();
-            var userRow = new Entity("systemuser", user);
-            userRow["isdisabled"] = false;
+            var asUser = new FakeOrganizationService();
+            asUser.Answer("systemuser", NotifiableUser(user));
+
             var form = new Entity("systemform", Guid.NewGuid());
             form["formxml"] = Forms.With(Field, Forms.EmailOnly());
-            _service.Answer("systemform", form).Answer("systemuser", userRow);
+            _service.Answer("systemform", form);
+
+            _factory = new FakeOrganizationServiceFactory(_service, asUser);
+            _context.MessageName = "Create";
+            WithImages(
+                Image(
+                    Field, Text,
+                    MetadataField, Payloads.Metadata(
+                        Field,
+                        Payloads.Mention(Payloads.NewId(), user.ToString("D"), 4, 12))),
+                null);
+
+            new MentionIngestPlugin(Mapping, null).Execute(
+                new FakeServiceProvider(_context, _trace, _factory));
+
+            // The recipient, and only the recipient, went through the caller's service.
+            Assert.Equal(new[] { "systemuser" }, asUser.Queries.ConvertAll(q => q.EntityName).ToArray());
+            Assert.Empty(asUser.Created);
+
+            // The form metadata, the idempotency lookup and the write went through SYSTEM.
+            Assert.Equal(
+                new[] { "systemform", "ayonto_mentionevent" },
+                _service.Queries.ConvertAll(q => q.EntityName).ToArray());
+            Assert.Equal("ayonto_mentionevent", Assert.Single(_service.Created).LogicalName);
+        }
+
+        [Fact]
+        public void a_recipient_the_saving_user_cannot_see_gets_no_event()
+        {
+            // The caller's service answers with no rows, which is what a recipient outside
+            // their reach looks like. There is nothing to tell that apart from a user who
+            // does not exist, and nothing should: reporting the difference would report the
+            // existence of a record the caller has no access to.
+            Guid user = Guid.NewGuid();
+            var form = new Entity("systemform", Guid.NewGuid());
+            form["formxml"] = Forms.With(Field, Forms.EmailOnly());
+            _service.Answer("systemform", form);
+            _factory = new FakeOrganizationServiceFactory(_service, new FakeOrganizationService());
 
             _context.MessageName = "Create";
             WithImages(
@@ -154,10 +205,11 @@ namespace Ayonto.Mention.Ingest.Tests
                         Payloads.Mention(Payloads.NewId(), user.ToString("D"), 4, 12))),
                 null);
 
-            Run();
+            new MentionIngestPlugin(Mapping, null).Execute(
+                new FakeServiceProvider(_context, _trace, _factory));
 
-            Assert.Single(_service.Created);
-            Assert.Equal(new Guid?[] { null }, _factory.AskedFor.ToArray());
+            Assert.Empty(_service.Created);
+            Assert.True(_trace.Said("Unknown"));
         }
 
         [Fact]
@@ -275,11 +327,9 @@ namespace Ayonto.Mention.Ingest.Tests
         public void the_table_and_the_record_come_from_the_execution_context_and_not_from_the_payload()
         {
             Guid user = Guid.NewGuid();
-            var userRow = new Entity("systemuser", user);
-            userRow["isdisabled"] = false;
             var form = new Entity("systemform", Guid.NewGuid());
             form["formxml"] = Forms.With(Field, Forms.EmailOnly());
-            _service.Answer("systemform", form).Answer("systemuser", userRow);
+            _service.Answer("systemform", form).Answer("systemuser", NotifiableUser(user));
 
             _context.MessageName = "Create";
             _context.PrimaryEntityName = "AYONTO_HostTable";
