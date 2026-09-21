@@ -147,6 +147,41 @@ namespace Ayonto.Mention.Ingest.Tests
         }
 
         [Fact]
+        public void a_recipient_whose_disabled_flag_cannot_be_read_is_refused_rather_than_assumed_active()
+        {
+            // `isdisabled` is system-required on systemuser, so its absence is a query
+            // that did not return what it asked for — or column security hiding it.
+            // Reading that silence as "not disabled" would notify on the strength of a
+            // value nobody saw.
+            var user = Guid.NewGuid();
+            var service = new FakeOrganizationService().Answer("systemuser", new Entity("systemuser", user));
+
+            Assert.Equal(RecipientStatus.Unknown, new SystemUserDirectory(service).Resolve(user).Status);
+        }
+
+        [Fact]
+        public void a_disabled_flag_that_is_not_a_boolean_is_refused_too()
+        {
+            var user = Guid.NewGuid();
+            var row = new Entity("systemuser", user);
+            row["isdisabled"] = "false";
+            var service = new FakeOrganizationService().Answer("systemuser", row);
+
+            Assert.Equal(RecipientStatus.Unknown, new SystemUserDirectory(service).Resolve(user).Status);
+        }
+
+        [Fact]
+        public void an_enabled_recipient_is_active()
+        {
+            var user = Guid.NewGuid();
+            var row = new Entity("systemuser", user);
+            row["isdisabled"] = false;
+            var service = new FakeOrganizationService().Answer("systemuser", row);
+
+            Assert.Equal(RecipientStatus.Active, new SystemUserDirectory(service).Resolve(user).Status);
+        }
+
+        [Fact]
         public void the_empty_identifier_is_nobody_and_is_not_looked_up()
         {
             var service = new FakeOrganizationService();

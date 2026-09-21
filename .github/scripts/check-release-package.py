@@ -125,6 +125,9 @@ class PackagedTable(NamedTuple):
     columns: frozenset[str]
     #: Exact view names, or None to require only that the table ships with one.
     views: frozenset[str] | None
+    #: Alternate keys, by logical name, each with the columns it covers. Empty means
+    #: the packaged table must carry none.
+    alternate_keys: dict[str, tuple[str, ...]]
     #: Whether the package has to carry it yet.
     required: bool
     forbidden_substrings: tuple[str, ...]
@@ -160,6 +163,9 @@ LEGACY_TABLE = PackagedTable(
         }
     ),
     views=frozenset({"Active Mentions"}),
+    # None, and asserted: this table is a verbatim export, and a key in the package
+    # would mean the source was edited.
+    alternate_keys={},
     required=True,
     forbidden_substrings=(),
 )
@@ -207,6 +213,11 @@ LEDGER_TABLE = PackagedTable(
     # Dataverse names the default view; this repository does not choose it. That
     # there is one is the thing worth asserting.
     views=None,
+    # The uniqueness constraint the ingest's idempotency rests on. Checked in the
+    # built package as well as in the source, because packing is where a component
+    # goes missing quietly: SolutionPackager reports what it could not take as a line
+    # in a log and exits zero.
+    alternate_keys={"ayonto_mentionevent_ak_eventid": ("ayonto_eventid",)},
     required=True,
     forbidden_substrings=(
         "deliverystatus",
@@ -486,6 +497,22 @@ def check_table(table: PackagedTable, entity: ElementTree.Element) -> None:
             f"{table.logical}: carries the lookup column(s) {lookups}. The recipient, the actor and "
             "the source row are scalar identifiers precisely so that this solution needs no link to "
             "a host table or to systemuser"
+        )
+
+    keys = {}
+    for key in entity.iter("EntityKey"):
+        covered = tuple(
+            (name.text or "").strip().lower()
+            for name in key.iter("AttributeName")
+            if (name.text or "").strip()
+        )
+        keys[(key.findtext("LogicalName") or "").strip().lower()] = covered
+    if keys != table.alternate_keys:
+        raise PackageError(
+            f"{table.logical}: the packaged alternate keys are wrong — found "
+            f"{sorted(keys.items())}, expected {sorted(table.alternate_keys.items())}. "
+            "The event identifier's key is what makes two asynchronous jobs unable to "
+            "write the same event twice; a package without it looks identical and is not"
         )
 
     views = set()

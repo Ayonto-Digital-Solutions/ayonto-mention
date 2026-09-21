@@ -226,6 +226,69 @@ namespace Ayonto.Mention.Ingest.Tests
         }
 
         [Fact]
+        public void a_concurrent_write_of_the_same_event_converges_on_one_row()
+        {
+            // Both jobs looked, both found nothing, one of them wrote. The alternate key
+            // refuses the second write, and the second job then reads the same identity
+            // back: that is a replay, not a failure and not a second notification.
+            Guid user = Recipient();
+            string eventId = Payloads.NewId();
+            string recordId = Payloads.NewId();
+            _ledger.LosingTheRaceTo(
+                new MentionEventIdentity(eventId, Table, recordId, Field, Canonical(user)));
+
+            IngestOutcome outcome = Run(Update(
+                Payloads.Image(Field, Text, MetadataField, Payloads.Metadata(
+                    Field,
+                    Payloads.Mention(eventId, Canonical(user), AlexAt, 12))),
+                Payloads.Image(MetadataField, "{}"),
+                recordId));
+
+            Assert.Equal(0, outcome.Created);
+            Assert.Equal(1, outcome.Replayed);
+            Assert.Empty(_ledger.Rows);
+            Assert.True(_trace.Said("written concurrently"));
+        }
+
+        [Fact]
+        public void a_concurrent_write_of_a_different_notification_under_one_identifier_is_a_conflict()
+        {
+            Guid user = Recipient();
+            string eventId = Payloads.NewId();
+            _ledger.LosingTheRaceTo(
+                new MentionEventIdentity(eventId, Table, Payloads.NewId(), Field, Payloads.NewId()));
+
+            IngestOutcome outcome = Run(Create(Payloads.Image(
+                Field, Text,
+                MetadataField, Payloads.Metadata(Field, Payloads.Mention(eventId, Canonical(user), AlexAt, 12)))));
+
+            Assert.Equal(0, outcome.Created);
+            Assert.Equal(1, outcome.Conflicted);
+            Assert.Empty(_ledger.Rows);
+            Assert.True(_trace.Said("event_id_conflict"));
+        }
+
+        [Fact]
+        public void an_identifier_refused_as_taken_but_unreadable_afterwards_creates_nothing()
+        {
+            // Nothing sound follows from "the key says taken" and "the ledger says
+            // nothing", so nothing is written.
+            Guid user = Recipient();
+            _ledger.LosingTheRaceTo(null);
+
+            IngestOutcome outcome = Run(Create(Payloads.Image(
+                Field, Text,
+                MetadataField, Payloads.Metadata(
+                    Field,
+                    Payloads.Mention(Payloads.NewId(), Canonical(user), AlexAt, 12)))));
+
+            Assert.Equal(0, outcome.Created);
+            Assert.Equal(1, outcome.Conflicted);
+            Assert.Empty(_ledger.Rows);
+            Assert.True(_trace.Said("cannot be read back"));
+        }
+
+        [Fact]
         public void a_recipient_who_does_not_exist_gets_no_event()
         {
             IngestOutcome outcome = Run(Create(Payloads.Image(

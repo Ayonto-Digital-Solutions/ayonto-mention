@@ -65,6 +65,24 @@ DESCRIPTION = (
 #: would make every build a different solution.
 VIEW_ID = "{b7c4e21a-3f96-4c58-9d0e-5a1f8c62d403}"
 
+#: The alternate key that makes one event identifier mean one row, in the database
+#: rather than only in the handler.
+#:
+#: The ingest checks for an existing event and then creates one, and those are two
+#: operations. Two asynchronous jobs for the same episode can both find nothing and
+#: both write, which would notify somebody twice — the exact thing `eventId` exists
+#: to prevent. A query cannot fix that; only a uniqueness constraint can, and
+#: Dataverse spells one as an alternate key.
+#:
+#: One column, `ayonto_EventId`, because that is already the product contract: an
+#: event identifier names one episode for one recipient, so it names one row. The
+#: conflict rule follows from the same constraint — a second row under a taken
+#: identifier cannot be written at all.
+KEY_SCHEMA_NAME = f"{SCHEMA}_AK_EventId"
+KEY_LOGICAL_NAME = KEY_SCHEMA_NAME.lower()
+KEY_DISPLAY_NAME = "MentionEvent_AK_EventId"
+KEY_COLUMN = "ayonto_eventid"
+
 #: Dropped: ownership belongs to the organization, not to a user or a team.
 USER_OWNED_ATTRIBUTES = ("OwnerId", "OwningBusinessUnit", "OwningTeam", "OwningUser")
 
@@ -227,6 +245,52 @@ INT_TEMPLATE = """<attribute PhysicalName="PLACEHOLDER">
         </attribute>"""
 
 
+# Reproduced verbatim from a real Microsoft solution export, because this
+# repository's own export has no alternate key to copy. Only the names and the
+# label are substituted:
+#   microsoft/Templates-for-Power-Platform
+#   Solutions/mpa_Kudos/src/Entities/mpa_Badge/Entity.xml
+#
+# That export is also where the element order comes from, and the order is the
+# reason this is copied rather than written from the schema reference: the
+# published schema lists `displaynames` before `EntityKeyAttributes`, and the real
+# export writes it after. A real export is what SolutionPackager produced and what
+# Dataverse accepted, so it is what this follows.
+#
+# `EntityKeys` sits between `</attributes>` and `<EntitySetName>`, which is where
+# the same export puts it.
+#
+# IsCustomizable is copied as 0 rather than raised to the 1 this table's columns
+# carry, and that is the export's value rather than a choice made here. It also
+# happens to be the right property for this component: a customer switching off the
+# key that makes the ingest idempotent would break the product quietly.
+ENTITY_KEY_TEMPLATE = """<EntityKeys>
+        <EntityKey>
+          <Name>KEYSCHEMA</Name>
+          <LogicalName>keylogical</LogicalName>
+          <IntroducedVersion>1.0.0.0</IntroducedVersion>
+          <IsCustomizable>0</IsCustomizable>
+          <EntityKeyAttributes>
+            <AttributeName>KEYCOLUMN</AttributeName>
+          </EntityKeyAttributes>
+          <displaynames>
+            <displayname description="KEYDISPLAY" languagecode="1033" />
+          </displaynames>
+        </EntityKey>
+      </EntityKeys>"""
+
+
+def build_entity_key() -> ET.Element:
+    """The alternate key, from the template above with this table's names in it."""
+    filled = (
+        ENTITY_KEY_TEMPLATE.replace("KEYSCHEMA", KEY_SCHEMA_NAME)
+        .replace("keylogical", KEY_LOGICAL_NAME)
+        .replace("KEYCOLUMN", KEY_COLUMN)
+        .replace("KEYDISPLAY", KEY_DISPLAY_NAME)
+    )
+    return ET.fromstring(filled)
+
+
 def text(parent: ET.Element, tag: str, value: str) -> None:
     node = parent.find(tag)
     if node is None:
@@ -376,6 +440,13 @@ def main() -> int:
     for attribute in system:
         attributes.append(attribute)
 
+    # Between </attributes> and <EntitySetName>, which is where the export this is
+    # copied from puts it. The key names a column, so it is written after the
+    # column it names exists.
+    if attributes.find(f".//attribute[@PhysicalName='ayonto_EventId']") is None:
+        raise SystemExit("the derived table has no ayonto_EventId for the alternate key to name")
+    entity.insert(list(entity).index(attributes) + 1, build_entity_key())
+
     # The option sets the legacy state and status columns carry are named after
     # the table they belong to.
     for node in entity.iter("optionset"):
@@ -442,6 +513,7 @@ def main() -> int:
         f"  {LOGICAL}: OrganizationOwned (OwnershipTypeMask OrgOwned), "
         f"{custom} custom column(s), {len(attributes)} total"
     )
+    print(f"  alternate key {KEY_LOGICAL_NAME} on {KEY_COLUMN}")
     return 0
 
 

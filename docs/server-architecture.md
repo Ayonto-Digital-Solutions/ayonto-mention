@@ -25,11 +25,16 @@ while; the second is the legacy product's, it is user-owned, and its columns car
 recipient's name and address. The new ledger is `ayonto_mentionevent`, the ingest
 targets only that, and a test reads the ingest's own sources to keep it that way.
 
-**And a package is not an import.** The event table's source is derived rather
-than exported — see [`powerplatform/README.md`](../powerplatform/README.md) — and
-a solution that packs cleanly is not evidence that Dataverse accepts it. Until
-the managed import has run in a real environment, the event table exists in this
-repository and nowhere else.
+**The table has now been through a real import.** `v1.1.0.2` managed was imported
+into the neutral Ayonto development environment and accepted, which is what proved
+the `OrgOwned` serialization corrected after v1.1.0.1's `0x80044150` rejection. The
+event table is no longer only a file in this repository.
+
+**What that import did not cover is everything added since.** The alternate key on
+`ayonto_EventId` is new in the source and has never been imported anywhere, and the
+plug-in assembly is not in a package at all. A component's presence in a package is
+still not evidence that Dataverse accepts it — the point simply moved rather than
+went away.
 
 The rest is written down so that the implementation, when it happens, is the
 implementation of a decision rather than a rediscovery of one — and so that the
@@ -98,7 +103,12 @@ and reusing another product's table is not the target.
 
 ### Two version numbers, and they are not the same number
 
-The target Dataverse solution and release version is **`1.1.0.2`**.
+The target Dataverse solution and release version is **`1.1.0.3`** — a revision on
+top of the `1.1.0.2` a real environment imported, because what the package gained
+since is the ledger's alternate key and nothing else. It is deliberately not a minor
+version: the server-side ingest exists in this repository but not in the package, so
+a number that read as "the server ships now" would be a claim rather than a version.
+See [`server/README.md`](../server/README.md).
 
 That is an ordinary solution version, not an unusual one. *"A solution's version
 has the following format: major.minor.build.revision"*, and the article's own
@@ -459,7 +469,7 @@ implemented, and nothing here should be read as saying it is.
 | | Current release | Target |
 |---|---|---|
 | Code component | `Ayonto.AyontoMentionControl` | unchanged |
-| Product table | the legacy-derived table, **UserOwned**, plus `ayonto_mentionevent`, **Organization-owned**, in the package since v1.1.0.1 — not yet import-proven | `ayonto_mentionevent` alone, once the legacy table is retired |
+| Product table | the legacy-derived table, **UserOwned**, plus `ayonto_mentionevent`, **Organization-owned** — import-proven by the real `v1.1.0.2` managed import; its new alternate key is not | `ayonto_mentionevent` alone, once the legacy table is retired |
 | Ingest | implemented in code under `server/`, not packaged, not registered, never run | async PostOperation step, host-registered |
 | Dispatcher | none | one universal solution-aware flow, in its own central automation solution |
 | Delivery | none | e-mail · Teams · in-app, state per channel |
@@ -480,7 +490,7 @@ flowchart TD
     text --> save["Source-record save"]
     meta --> save
     save -.-> step["async PostOperation step<br/>on the host source table<br/>(implemented, not registered)"]
-    step -.-> ledger["ayonto_mentionevent<br/>(packaged since v1.1.0.1, import unproven)"]
+    step -.-> ledger["ayonto_mentionevent<br/>(imported and accepted as of v1.1.0.2;<br/>its alternate key is newer)"]
     ledger -.-> dispatcher["planned: dispatcher"]
     dispatcher -.-> channels["planned: e-mail · Teams · in-app"]
 ```
@@ -750,6 +760,28 @@ It exists so that processing the same episode twice does not notify twice:
 The immutable identity of a notification stays
 `eventId` + `recordTable` + `recordId` + `sourceField` + `recipientUserId`.
 Occurrence positions are not part of it and never become part of it.
+
+**And the rule needs a constraint, not only a check.** Looking for an existing event
+and then creating one are two operations. Two asynchronous jobs for the same episode
+can both look, both find nothing, and both write — which notifies somebody twice,
+the exact thing `eventId` exists to prevent. No amount of querying closes that
+window.
+
+So `ayonto_EventId` carries a **Dataverse alternate key**, which is how the platform
+spells a uniqueness constraint on a column. One column is enough because it is
+already the contract: an event identifier names one episode for one recipient, so it
+names one row. The constraint is also what turns the conflict rule above from a
+convention into something the database enforces — a second row under a taken
+identifier cannot be written at all.
+
+The handler then has to hear it. A create refused with `DuplicateRecordEntityKey`
+(`0x80060892`) — "Entity Key {0} violated. A record with the same value for {1}
+already exists" — means another job got there first, so the ingest re-reads the
+ledger and applies the same two-line rule to what it finds: same identity is a
+replay, a different one is a conflict. Nothing else is caught. A privilege error, a
+timeout or an unexpected fault belongs to the system job, where somebody can see it;
+an ingest that read every fault as idempotency would report success for a
+notification it never recorded.
 
 ## Who may write the ledger
 

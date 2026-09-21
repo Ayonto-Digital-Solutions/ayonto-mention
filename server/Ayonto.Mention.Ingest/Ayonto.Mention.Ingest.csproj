@@ -47,6 +47,26 @@
     <FileVersion>1.0.0.0</FileVersion>
     <ProjectTypeGuids>{4C25E9B5-9FA6-436c-8E19-B395D2A65FAF};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <!--
+      Strong-named, because that is what registering this assembly requires.
+      Microsoft: "If you don't use the dependent assemblies capability, you must
+      sign assemblies before you register them with Dataverse", and the route this
+      assembly is on is the standalone one — the solution project's own tooling
+      knows only PluginAssemblies and their registration configuration, not plug-in
+      packages. An unsigned assembly could not even complete step one of the
+      packaging path in server/README.md.
+
+      The key file is committed, and it is not a secret. A strong name is an
+      identity, not an authentication: anyone can generate a key and sign their own
+      assembly, and Microsoft is explicit that a strong name provides no trust
+      guarantee. What it does provide is the stable name+version+publicKeyToken
+      that Dataverse registers an assembly under — which is exactly why it has to
+      be the same key on every machine and in every build, and therefore why it is
+      in the repository rather than in a build secret. A test pins the resulting
+      public key token so the identity cannot change unnoticed.
+    -->
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>Ayonto.Mention.Ingest.snk</AssemblyOriginatorKeyFile>
     <RootNamespace>Ayonto.Mention.Ingest</RootNamespace>
     <AssemblyName>Ayonto.Mention.Ingest</AssemblyName>
     <!--

@@ -1467,6 +1467,20 @@
           </Descriptions>
         </attribute>
       </attributes>
+      <EntityKeys>
+        <EntityKey>
+          <Name>ayonto_MentionEvent_AK_EventId</Name>
+          <LogicalName>ayonto_mentionevent_ak_eventid</LogicalName>
+          <IntroducedVersion>1.0.0.0</IntroducedVersion>
+          <IsCustomizable>0</IsCustomizable>
+          <EntityKeyAttributes>
+            <AttributeName>ayonto_eventid</AttributeName>
+          </EntityKeyAttributes>
+          <displaynames>
+            <displayname description="MentionEvent_AK_EventId" languagecode="1033" />
+          </displaynames>
+        </EntityKey>
+      </EntityKeys>
       <EntitySetName>ayonto_mentionevents</EntitySetName>
       <IsDuplicateCheckSupported>0</IsDuplicateCheckSupported>
       <IsBusinessProcessEnabled>0</IsBusinessProcessEnabled>

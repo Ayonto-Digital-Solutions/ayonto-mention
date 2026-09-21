@@ -108,6 +108,8 @@ namespace Ayonto.Mention.Ingest.Tests.Fakes
     public sealed class FakeMentionEventLedger : IMentionEventLedger
     {
         private readonly List<MentionEventIdentity> _existing = new List<MentionEventIdentity>();
+        private MentionEventIdentity _writtenByTheRace;
+        private bool _racesOnce;
 
         /// <summary>The rows that were created, in order.</summary>
         public List<MentionEventRow> Rows { get; } = new List<MentionEventRow>();
@@ -118,6 +120,18 @@ namespace Ayonto.Mention.Ingest.Tests.Fakes
         public FakeMentionEventLedger Holding(MentionEventIdentity identity)
         {
             _existing.Add(identity);
+            return this;
+        }
+
+        /// <summary>
+        /// Behaves like a second asynchronous job that got there first: the lookup finds
+        /// nothing, and then the alternate key refuses the write because
+        /// <paramref name="winner"/> has just been written under the same identifier.
+        /// </summary>
+        public FakeMentionEventLedger LosingTheRaceTo(MentionEventIdentity winner)
+        {
+            _writtenByTheRace = winner;
+            _racesOnce = true;
             return this;
         }
 
@@ -137,10 +151,22 @@ namespace Ayonto.Mention.Ingest.Tests.Fakes
             return found;
         }
 
-        public void Create(MentionEventRow row)
+        public LedgerWriteOutcome Create(MentionEventRow row)
         {
+            if (_racesOnce)
+            {
+                _racesOnce = false;
+                if (_writtenByTheRace != null)
+                {
+                    _existing.Add(_writtenByTheRace);
+                }
+
+                return LedgerWriteOutcome.EventIdTaken;
+            }
+
             Rows.Add(row);
             _existing.Add(row.Identity);
+            return LedgerWriteOutcome.Created;
         }
     }
 }

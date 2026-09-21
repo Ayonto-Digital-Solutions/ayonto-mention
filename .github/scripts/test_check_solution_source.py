@@ -93,14 +93,38 @@ def attribute_xml(
     return "\n".join(parts)
 
 
+#: The ledger's alternate key, by logical name and the column it covers. The
+#: uniqueness the ingest's idempotency needs, which two asynchronous jobs would
+#: otherwise be able to write around.
+LEDGER_KEYS = [("ayonto_mentionevent_ak_eventid", ["ayonto_eventid"])]
+
+
+def entity_key_xml(logical: str, covered: list[str]) -> str:
+    names = "\n".join(f"          <AttributeName>{column}</AttributeName>" for column in covered)
+    return (
+        "        <EntityKey>\n"
+        f"          <Name>{logical}</Name>\n"
+        f"          <LogicalName>{logical}</LogicalName>\n"
+        "          <EntityKeyAttributes>\n"
+        f"{names}\n"
+        "          </EntityKeyAttributes>\n"
+        "        </EntityKey>"
+    )
+
+
 def entity_xml(
     logical: str,
     entity_set: str,
     ownership: str,
     columns: list[tuple[str, str, str | None, int | None, str]],
     views: list[str],
+    alternate_keys: list[tuple[str, list[str]]] | None = None,
 ) -> str:
     attributes = "\n".join(attribute_xml(*column) for column in columns)
+    keys = ""
+    if alternate_keys:
+        declared = "\n".join(entity_key_xml(name, covered) for name, covered in alternate_keys)
+        keys = f"      <EntityKeys>\n{declared}\n      </EntityKeys>\n"
     saved = "\n".join(
         "      <savedquery>\n"
         "        <LocalizedNames>\n"
@@ -117,6 +141,7 @@ def entity_xml(
         f"      <EntitySetName>{entity_set}</EntitySetName>\n"
         f"      <OwnershipTypeMask>{ownership}</OwnershipTypeMask>\n"
         f"{attributes}\n"
+        f"{keys}"
         "    </entity>\n"
         "  </EntityInfo>\n"
         "  <SavedQueries>\n"
@@ -136,6 +161,8 @@ def build_source(
     ledger_ownership: str = "OrgOwned",
     ledger_views: list[str] | None = None,
     ledger_entity_set: str = "ayonto_mentionevents",
+    ledger_keys: list[tuple[str, list[str]]] | None = None,
+    legacy_keys: list[tuple[str, list[str]]] | None = None,
     extra_relationships: list[tuple[str, str, str]] | None = None,
     extra_folders: dict[str, str] | None = None,
 ) -> Path:
@@ -149,7 +176,14 @@ def build_source(
     legacy = src / "Entities" / "ayonto_Mention"
     legacy.mkdir()
     (legacy / "Entity.xml").write_text(
-        entity_xml("ayonto_mention", "ayonto_mentions", "UserOwned", LEGACY_COLUMNS, ["Active Mentions"]),
+        entity_xml(
+            "ayonto_mention",
+            "ayonto_mentions",
+            "UserOwned",
+            LEGACY_COLUMNS,
+            ["Active Mentions"],
+            legacy_keys,
+        ),
         encoding="utf-8",
     )
 
@@ -164,6 +198,7 @@ def build_source(
                 ledger_ownership,
                 ledger_columns if ledger_columns is not None else LEDGER_COLUMNS,
                 ledger_views if ledger_views is not None else ["Active Mentions"],
+                ledger_keys if ledger_keys is not None else LEDGER_KEYS,
             ),
             encoding="utf-8",
         )
@@ -387,6 +422,62 @@ class SourceCheckerTests(unittest.TestCase):
         code, said = run(build_source(self.root, ledger_views=[]))
         self.assertEqual(code, 1)
         self.assertIn("no view at all", said)
+
+    def test_rejects_a_ledger_with_no_alternate_key(self) -> None:
+        # The key is what keeps two asynchronous jobs from both finding no event
+        # and both writing one. Losing it would notify somebody twice, and nothing
+        # else in a build would notice.
+        code, said = run(build_source(self.root, ledger_keys=[]))
+        self.assertEqual(code, 1)
+        self.assertIn("alternate keys drifted", said)
+
+    def test_rejects_an_alternate_key_on_the_wrong_column(self) -> None:
+        code, said = run(
+            build_source(
+                self.root,
+                ledger_keys=[("ayonto_mentionevent_ak_eventid", ["ayonto_recipientuserid"])],
+            )
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("alternate keys drifted", said)
+
+    def test_rejects_an_alternate_key_nobody_asked_for(self) -> None:
+        code, said = run(
+            build_source(
+                self.root,
+                ledger_keys=[
+                    ("ayonto_mentionevent_ak_eventid", ["ayonto_eventid"]),
+                    ("ayonto_mentionevent_ak_recipient", ["ayonto_recipientuserid"]),
+                ],
+            )
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("alternate keys drifted", said)
+
+    def test_rejects_an_alternate_key_naming_a_column_the_table_has_not_got(self) -> None:
+        code, said = run(
+            build_source(
+                self.root,
+                ledger_keys=[("ayonto_mentionevent_ak_eventid", ["ayonto_nosuchcolumn"])],
+            )
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("alternate keys drifted", said)
+
+    def test_rejects_an_alternate_key_on_the_legacy_table(self) -> None:
+        # That file is a verbatim export. A key in it means somebody edited it.
+        code, said = run(
+            build_source(self.root, legacy_keys=[("ayonto_mention_ak_x", ["ayonto_mentionid"])])
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("alternate keys drifted", said)
+
+    def test_accepts_the_committed_source_with_its_alternate_key(self) -> None:
+        # The real tree, not a fixture: the derived table has to satisfy the same
+        # contract the fixtures are held to.
+        code, said = run(REPOSITORY_SOURCE)
+        self.assertEqual(code, 0, said)
+        self.assertIn("1 alternate key(s)", said)
 
     def test_rejects_an_unknown_table_folder(self) -> None:
         code, said = run(build_source(self.root, extra_folders={"ayonto_Something": "ayonto_something"}))

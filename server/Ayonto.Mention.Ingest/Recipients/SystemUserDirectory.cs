@@ -55,13 +55,20 @@ namespace Ayonto.Mention.Ingest.Recipients
             }
 
             Entity user = found.Entities[0];
-            bool? disabled = user.GetAttributeValue<bool?>("isdisabled");
-            if (disabled.GetValueOrDefault())
+
+            // Fail closed on an answer that cannot be read. `isdisabled` is a
+            // system-required column on `systemuser`, so its absence here is not an
+            // ordinary user with an ordinary gap — it is a query that did not return what
+            // it asked for, or column security hiding it. Reading that silence as "not
+            // disabled" would be choosing to notify on the strength of a value nobody
+            // saw, which is the one direction this ingest must not guess in.
+            object raw;
+            if (!user.Attributes.TryGetValue("isdisabled", out raw) || !(raw is bool))
             {
-                return RecipientResolution.Disabled();
+                return RecipientResolution.Unknown();
             }
 
-            return RecipientResolution.Active();
+            return (bool)raw ? RecipientResolution.Disabled() : RecipientResolution.Active();
         }
     }
 }

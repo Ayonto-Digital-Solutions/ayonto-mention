@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ServiceModel;
 using Ayonto.Mention.Ingest.Ledger;
 using Ayonto.Mention.Ingest.Notifications;
 using Ayonto.Mention.Ingest.Tests.Fakes;
@@ -41,6 +42,69 @@ namespace Ayonto.Mention.Ingest.Tests
         public void the_ledger_is_the_event_table_and_nothing_else()
         {
             Assert.Equal("ayonto_mentionevent", MentionEventColumns.TableLogicalName);
+        }
+
+        /// <summary>
+        /// `DuplicateRecordEntityKey`: "Entity Key {0} violated. A record with the same
+        /// value for {1} already exists." The alternate key on `ayonto_EventId` refusing a
+        /// second row under an identifier that is taken.
+        /// </summary>
+        private const int DuplicateRecordEntityKey = unchecked((int)0x80060892);
+
+        /// <summary>`CrmSQLUniqueIndexOrConstraintViolation`, the same condition from storage.</summary>
+        private const int UniqueConstraintViolation = unchecked((int)0x80073002);
+
+        /// <summary>`PrivilegeDenied`. Nothing to do with idempotency, and must not be swallowed.</summary>
+        private const int PrivilegeDenied = unchecked((int)0x80040220);
+
+        [Fact]
+        public void a_write_that_goes_through_reports_that_it_did()
+        {
+            var service = new FakeOrganizationService();
+
+            Assert.Equal(
+                LedgerWriteOutcome.Created,
+                new MentionEventLedger(service).Create(Row(NotificationConfiguration.Silent)));
+        }
+
+        [Theory]
+        [InlineData(unchecked((int)0x80060892))]
+        [InlineData(unchecked((int)0x80073002))]
+        public void the_event_identifier_being_taken_is_an_outcome_rather_than_a_failure(int errorCode)
+        {
+            // Two asynchronous jobs for one episode can both find nothing and both write.
+            // The alternate key is what stops the second one, and this is the ingest
+            // hearing it rather than failing the job over it.
+            var service = new FakeOrganizationService().RefusingCreate(errorCode);
+
+            Assert.Equal(
+                LedgerWriteOutcome.EventIdTaken,
+                new MentionEventLedger(service).Create(Row(NotificationConfiguration.Silent)));
+            Assert.Empty(service.Created);
+        }
+
+        [Fact]
+        public void the_same_answer_is_read_out_of_an_inner_fault()
+        {
+            var service = new FakeOrganizationService().RefusingCreateWithInnerFault(DuplicateRecordEntityKey);
+
+            Assert.Equal(
+                LedgerWriteOutcome.EventIdTaken,
+                new MentionEventLedger(service).Create(Row(NotificationConfiguration.Silent)));
+        }
+
+        [Fact]
+        public void any_other_fault_belongs_to_the_system_job_and_is_not_swallowed()
+        {
+            // An ingest that read every fault as idempotency would report success for a
+            // notification it never recorded.
+            var service = new FakeOrganizationService().RefusingCreate(PrivilegeDenied);
+
+            FaultException<OrganizationServiceFault> thrown =
+                Assert.Throws<FaultException<OrganizationServiceFault>>(
+                    () => new MentionEventLedger(service).Create(Row(NotificationConfiguration.Silent)));
+
+            Assert.Equal(PrivilegeDenied, thrown.Detail.ErrorCode);
         }
 
         [Fact]

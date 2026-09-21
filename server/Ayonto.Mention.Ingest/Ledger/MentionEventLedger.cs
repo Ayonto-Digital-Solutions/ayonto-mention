@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ServiceModel;
 using Ayonto.Mention.Ingest.Notifications;
 using Microsoft.Xrm.Sdk;
 using Microsoft.Xrm.Sdk.Query;
@@ -26,6 +27,29 @@ namespace Ayonto.Mention.Ingest.Ledger
     /// </summary>
     public sealed class MentionEventLedger : IMentionEventLedger
     {
+        /// <summary>
+        /// `DuplicateRecordEntityKey` — "Entity Key {0} violated. A record with the same
+        /// value for {1} already exists. A duplicate record cannot be created."
+        ///
+        /// This is the alternate key on `ayonto_EventId` refusing a second row under an
+        /// identifier that is taken, and it is the only entity key this table has — so a
+        /// key violation on a create against this table is that key, without having to
+        /// read a localized message to find out which.
+        /// https://learn.microsoft.com/power-apps/developer/data-platform/reference/web-service-error-codes
+        /// </summary>
+        private const int DuplicateRecordEntityKey = unchecked((int)0x80060892);
+
+        /// <summary>
+        /// `CrmSQLUniqueIndexOrConstraintViolation` — "The operation attempted to insert a
+        /// duplicate value for an attribute with a unique constraint."
+        ///
+        /// The same condition surfacing from the storage layer rather than from the key
+        /// validation above. Accepted as the same answer because the only unique
+        /// constraints on this table are its primary key, which the platform generates,
+        /// and the event identifier's key.
+        /// </summary>
+        private const int UniqueConstraintViolation = unchecked((int)0x80073002);
+
         private readonly IOrganizationService _service;
 
         public MentionEventLedger(IOrganizationService service)
@@ -81,7 +105,7 @@ namespace Ayonto.Mention.Ingest.Ledger
             return identities;
         }
 
-        public void Create(MentionEventRow row)
+        public LedgerWriteOutcome Create(MentionEventRow row)
         {
             if (row == null)
             {
@@ -114,7 +138,39 @@ namespace Ayonto.Mention.Ingest.Ledger
                 MentionEventColumns.InAppBody,
                 MentionEventColumns.InAppLinkText);
 
-            _service.Create(entity);
+            try
+            {
+                _service.Create(entity);
+                return LedgerWriteOutcome.Created;
+            }
+            catch (FaultException<OrganizationServiceFault> refused)
+                when (IsEventIdTaken(refused.Detail))
+            {
+                // Narrow on purpose. Two error codes, both meaning "this identifier is
+                // already used", and nothing else is caught here: a privilege error, a
+                // missing column, a timeout and an unexpected fault all belong to the
+                // system job, where somebody can see them. An ingest that treated every
+                // fault as idempotency would report success for a notification it never
+                // recorded.
+                return LedgerWriteOutcome.EventIdTaken;
+            }
+        }
+
+        /// <summary>
+        /// Whether this fault is the event identifier's uniqueness constraint, including
+        /// where the platform wrapped it in an inner fault.
+        /// </summary>
+        private static bool IsEventIdTaken(OrganizationServiceFault fault)
+        {
+            for (OrganizationServiceFault at = fault; at != null; at = at.InnerFault)
+            {
+                if (at.ErrorCode == DuplicateRecordEntityKey || at.ErrorCode == UniqueConstraintViolation)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static void Write(

@@ -220,38 +220,101 @@ namespace Ayonto.Mention.Ingest
                 mapping.SourceField,
                 claim.RecipientUserId);
 
-            IReadOnlyList<MentionEventIdentity> existing = _ledger.WithEventId(claim.EventId);
-            if (existing != null && existing.Count > 0)
+            switch (Decide(_ledger.WithEventId(claim.EventId), identity))
             {
-                foreach (MentionEventIdentity other in existing)
-                {
-                    if (identity.Matches(other))
-                    {
-                        // A replay. The same episode processed twice does not notify
-                        // twice, which is the whole reason the event identifier exists.
-                        outcome.Replayed++;
-                        _trace.Trace("mention ingest: event {0} is a replay, nothing created", claim.EventId);
-                        return;
-                    }
-                }
+                case EventDecision.Replay:
+                    // The same episode processed twice does not notify twice, which is the
+                    // whole reason the event identifier exists.
+                    outcome.Replayed++;
+                    _trace.Trace("mention ingest: event {0} is a replay, nothing created", claim.EventId);
+                    return;
 
-                // event_id_conflict. One identifier now names two different
-                // notifications, and there is no version of this that is safe to guess
-                // at: the existing row is not rewritten, and no second event is created.
-                outcome.Conflicted++;
+                case EventDecision.Conflict:
+                    // event_id_conflict. One identifier now names two different
+                    // notifications, and there is no version of this that is safe to guess
+                    // at: the existing row is not rewritten, and no second event is created.
+                    outcome.Conflicted++;
+                    _trace.Trace(
+                        "mention ingest: event_id_conflict on {0} — it already names a different notification, refusing",
+                        claim.EventId);
+                    return;
+            }
+
+            LedgerWriteOutcome written = _ledger.Create(
+                new MentionEventRow(identity, request.InitiatingUserId, configuration));
+            if (written == LedgerWriteOutcome.Created)
+            {
+                outcome.Created++;
                 _trace.Trace(
-                    "mention ingest: event_id_conflict on {0} — it already names a different notification, refusing",
-                    claim.EventId);
+                    "mention ingest: created event {0} for {1}.{2}",
+                    claim.EventId,
+                    request.RecordTable,
+                    mapping.SourceField);
                 return;
             }
 
-            _ledger.Create(new MentionEventRow(identity, request.InitiatingUserId, configuration));
-            outcome.Created++;
-            _trace.Trace(
-                "mention ingest: created event {0} for {1}.{2}",
-                claim.EventId,
-                request.RecordTable,
-                mapping.SourceField);
+            // The identifier was free when it was looked up and taken by the time the row
+            // was written: another asynchronous job for the same episode got there first.
+            // The decision is the same one as before, taken again on what the ledger now
+            // holds — the rule does not change because of who won a race.
+            switch (Decide(_ledger.WithEventId(claim.EventId), identity))
+            {
+                case EventDecision.Replay:
+                    outcome.Replayed++;
+                    _trace.Trace(
+                        "mention ingest: event {0} was written concurrently with the same identity — replay, one row stands",
+                        claim.EventId);
+                    return;
+
+                case EventDecision.Conflict:
+                    outcome.Conflicted++;
+                    _trace.Trace(
+                        "mention ingest: event_id_conflict on {0} — it was taken concurrently by a different notification, refusing",
+                        claim.EventId);
+                    return;
+
+                default:
+                    // The key refused the write and the ledger now shows nothing under
+                    // that identifier. Nothing sound can be concluded from that, so
+                    // nothing is written and the refusal is recorded as one.
+                    outcome.Conflicted++;
+                    _trace.Trace(
+                        "mention ingest: event {0} was refused as taken but cannot be read back — refusing rather than retrying",
+                        claim.EventId);
+                    return;
+            }
+        }
+
+        /// <summary>
+        /// What an event identifier's existing rows mean for the event about to be
+        /// written. One rule, and it is asked twice: before the write, and again if the
+        /// uniqueness constraint says somebody else got there in between.
+        /// </summary>
+        private static EventDecision Decide(
+            IReadOnlyList<MentionEventIdentity> existing,
+            MentionEventIdentity identity)
+        {
+            if (existing == null || existing.Count == 0)
+            {
+                return EventDecision.New;
+            }
+
+            foreach (MentionEventIdentity other in existing)
+            {
+                if (identity.Matches(other))
+                {
+                    return EventDecision.Replay;
+                }
+            }
+
+            return EventDecision.Conflict;
+        }
+
+        private enum EventDecision
+        {
+            New,
+            Replay,
+            Conflict,
         }
     }
 }

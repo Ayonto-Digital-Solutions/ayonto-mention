@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ServiceModel;
 using Microsoft.Xrm.Sdk;
 using Microsoft.Xrm.Sdk.Query;
 
@@ -30,6 +31,31 @@ namespace Ayonto.Mention.Ingest.Tests.Fakes
 
         /// <summary>Every row that was created, in order.</summary>
         public List<Entity> Created { get; } = new List<Entity>();
+
+        private OrganizationServiceFault _refuseCreateWith;
+
+        /// <summary>
+        /// Makes the next create fail the way Dataverse does, with a fault carrying this
+        /// error code. Used for the uniqueness constraint and for the faults that are not
+        /// it.
+        /// </summary>
+        public FakeOrganizationService RefusingCreate(int errorCode, string message = "refused")
+        {
+            _refuseCreateWith = new OrganizationServiceFault { ErrorCode = errorCode, Message = message };
+            return this;
+        }
+
+        /// <summary>The same, with the code arriving in an inner fault rather than the outer one.</summary>
+        public FakeOrganizationService RefusingCreateWithInnerFault(int errorCode)
+        {
+            _refuseCreateWith = new OrganizationServiceFault
+            {
+                ErrorCode = 0,
+                Message = "outer",
+                InnerFault = new OrganizationServiceFault { ErrorCode = errorCode, Message = "inner" },
+            };
+            return this;
+        }
 
         /// <summary>Answers the next query against this table with these rows.</summary>
         public FakeOrganizationService Answer(string entityName, params Entity[] rows)
@@ -81,6 +107,13 @@ namespace Ayonto.Mention.Ingest.Tests.Fakes
         public Guid Create(Entity entity)
         {
             Refuse(entity.LogicalName);
+            if (_refuseCreateWith != null)
+            {
+                OrganizationServiceFault fault = _refuseCreateWith;
+                _refuseCreateWith = null;
+                throw new FaultException<OrganizationServiceFault>(fault, new FaultReason(fault.Message));
+            }
+
             Created.Add(entity);
             return Guid.NewGuid();
         }

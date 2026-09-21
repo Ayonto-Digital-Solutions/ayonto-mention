@@ -125,6 +125,42 @@ namespace Ayonto.Mention.Ingest.Tests
         }
 
         [Fact]
+        public void one_service_is_opened_and_it_is_system_for_the_resolution_reads_too()
+        {
+            // Deliberate, and the reason is consistency rather than convenience. Form
+            // metadata and the recipient's state are product state, and reading them
+            // through the saving user's context would scope them to that user's roles:
+            // the same mention on the same field would resolve a configuration for one
+            // colleague and none for another, or find a recipient in one business unit
+            // and not in another. The event row is durable and shared, so what goes into
+            // it must not depend on who happened to press save.
+            //
+            // Nothing is returned to anybody: the reads feed a row this product owns.
+            // Guid.Empty — "the same user as IPluginExecutionContext.UserId" — is what
+            // this test asserts is *not* asked for.
+            Guid user = Guid.NewGuid();
+            var userRow = new Entity("systemuser", user);
+            userRow["isdisabled"] = false;
+            var form = new Entity("systemform", Guid.NewGuid());
+            form["formxml"] = Forms.With(Field, Forms.EmailOnly());
+            _service.Answer("systemform", form).Answer("systemuser", userRow);
+
+            _context.MessageName = "Create";
+            WithImages(
+                Image(
+                    Field, Text,
+                    MetadataField, Payloads.Metadata(
+                        Field,
+                        Payloads.Mention(Payloads.NewId(), user.ToString("D"), 4, 12))),
+                null);
+
+            Run();
+
+            Assert.Single(_service.Created);
+            Assert.Equal(new Guid?[] { null }, _factory.AskedFor.ToArray());
+        }
+
+        [Fact]
         public void an_update_reads_both_images()
         {
             string payload = Payloads.Metadata(

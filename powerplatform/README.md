@@ -100,7 +100,8 @@ A hand-written `RibbonDiff.xml` is a fourth: the packer answers it with a
 | Publisher choice value prefix | `14144`         |
 | Code component                | `Ayonto.AyontoMentionControl` |
 | Table (current)               | `ayonto_mention`, **UserOwned**, from v1.1.0 |
-| Table (product)               | `ayonto_mentionevent`, **Organization-owned**, shipped as solution source in v1.1.0.1 — derived from the legacy export, **not yet import-proven** |
+| Table (product)               | `ayonto_mentionevent`, **Organization-owned**, derived from the legacy export — **imported and accepted** by the real environment as part of `v1.1.0.2` managed |
+| Alternate key                 | `ayonto_mentionevent_ak_eventid` on `ayonto_EventId` — the uniqueness the ingest's idempotency rests on, **newer than that import and not yet import-proven** |
 | Ownership, as solution XML spells it | `<OwnershipTypeMask>OrgOwned</OwnershipTypeMask>` — the serialization of the `OrganizationOwned` model; v1.1.0.1 wrote the model's name instead and the real import rejected the table with `0x80044150` ([why](../docs/server-architecture.md#the-product-event-table)) |
 
 **The choice value prefix is taken from the publisher that already exists.**
