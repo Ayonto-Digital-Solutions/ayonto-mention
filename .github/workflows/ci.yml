@@ -64,6 +64,17 @@ jobs:
           python3 tools/powerplatform/generate-mentionevent-entity.py
           git diff --exit-code -- powerplatform/src/Entities/ayonto_MentionEvent/Entity.xml
 
+      # The ingest assembly's registration source, for the same reason and with a
+      # sharper edge. Its three identifiers are pinned: a PluginAssemblyId that changed
+      # makes the next import a different component rather than an update of this one,
+      # and every registered step in every environment keeps pointing at the assembly
+      # that is no longer there. A hand edit here, or a generator nobody re-ran, fails
+      # in this step rather than in somebody's environment.
+      - name: Check the plug-in registration source is what the generator produces
+        run: |
+          python3 tools/powerplatform/generate-mention-ingest-registration.py
+          git diff --exit-code -- powerplatform/src/PluginAssemblies powerplatform/src/Other/Solution.xml
+
       # The version contract: a four-part solution version, a three-part control
       # version, and nothing deriving one from the other. These run here rather
       # than only in the release workflow, because the release workflow is the

@@ -42,11 +42,12 @@ Keeping identity apart from text is what gives the control these properties:
 
 ## Current status
 
-Most of what follows is about the **client**. The server side has one piece now:
-the ingest that turns a saved record into event rows is implemented in code under
-[`server/`](server/README.md), with unit tests. It has never run — the assembly is
-not in the solution package, no step is registered anywhere, and no event row has
-been created in any environment. Nothing reads or writes either table yet.
+Most of what follows is about the **client**. The server side has one piece now: the
+ingest that turns a saved record into event rows, implemented and unit-tested under
+[`server/`](server/README.md), and shipped in the solution from `1.2.0.0`. It has still
+never run — the base solution carries the assembly and no step, because a step names a
+host table and belongs to the host application's own solution. Nothing reads or writes
+either table yet.
 
 | Area | Status |
 |---|---|
@@ -66,10 +67,11 @@ been created in any environment. Nothing reads or writes either table yet.
 | Central `ayonto_mention` table packaged with the solution | ✅ from v1.1.0 — the table is installed by the import |
 | Organization-owned `ayonto_mentionevent` event table, solution and package source | ✅ shipped as solution source in v1.1.0.1 — derived from the real legacy export, see [`powerplatform/README.md`](powerplatform/README.md) |
 | That table accepted by a real Dataverse environment | ✅ `v1.1.0.2` managed was imported into the neutral development environment and accepted. v1.1.0.1 had been **rejected** there with `0x80044150`, *Requested value 'OrganizationOwned' was not found*, because solution XML serializes that ownership model as `OrgOwned`; the corrected serialization is what went through |
-| `ayonto_EventId` alternate key, so one event identifier can only ever name one row | ✅ in the solution source and checked by the build — ⏳ newer than the import above, so not yet import-proven |
+| `ayonto_EventId` alternate key, so one event identifier can only ever name one row | ✅ in the solution source, checked by the build, and **accepted by a real import**: `v1.1.0.3` managed went into the development environment — ⏳ its `EntityKeyIndexStatus` has not been read, so the index is not yet known to be **Active**, and an index that is not Active enforces nothing |
 | Server-side ingest: a saved record becomes `ayonto_mentionevent` rows | ✅ implemented in code and unit-tested in [`server/`](server/README.md) — nothing has run it |
-| That assembly packaged with the solution | ⏳ blocked by a Microsoft tooling defect in the solution project's plug-in handling — attempted twice, in both configurations the current tooling produces, see [`server/README.md`](server/README.md) |
-| The two ingest steps registered on a host table | ⏳ host-owned, and pending |
+| That assembly packaged with the solution | ✅ from solution `1.2.0.0` — in the managed **and** the unmanaged package, with its plug-in type, built by CI rather than committed |
+| That package imported into an environment | ⏳ pending — nothing has imported a package carrying the assembly |
+| The two ingest steps registered on a host table | ⏳ host-owned, and pending — a step names a host table, so the base solution cannot carry one |
 | Universal dispatcher, e-mail/Teams/in-app delivery | ⏳ not started, see [Roadmap](#roadmap) and [docs/server-architecture.md](docs/server-architecture.md) |
 
 **Selecting a mention does not send anything today, and does not write a row to
@@ -119,9 +121,12 @@ kept per channel; and notification settings configured on the component itself.
 The event table has shipped in the package since v1.1.0.1 and was **imported and
 accepted** by a real environment as part of `v1.1.0.2` managed, once its ownership
 serialization was corrected. From `1.1.0.3` it also carries the alternate key that
-makes one event identifier name one row, and that key is newer than the import.
+makes one event identifier name one row, which `v1.1.0.3` managed then imported
+successfully. What has not been read is the key's index status: Dataverse builds that
+index asynchronously, and only an **Active** one enforces the uniqueness.
 
-Of the rest of that list, the ingest is built and nothing downstream of it is.
+From `1.2.0.0` the package also carries the ingest assembly and its plug-in type. Of the
+rest of that list, nothing downstream of the ingest is built.
 How those component settings reach the server
 authoritatively is now decided: the server resolves the published control
 configuration from form metadata, per table and field, instead of trusting what a
@@ -367,10 +372,11 @@ present in one environment, and a form can carry either.
 
 - the central `ayonto_mention` table, its view and its relationships
 
-**What it does not contain**: the ingest assembly — implemented under
-[`server/`](server/README.md), and blocked out of the package by a Microsoft tooling
-defect rather than by missing code — the registered steps, the dispatcher, e-mail,
-Teams and in-app delivery, and any delivery configuration or state.
+**What it does not contain**: the registered steps — a step names a host table, so it
+belongs to the host application's solution — the dispatcher, e-mail, Teams and in-app
+delivery, and any delivery configuration or state. From `1.2.0.0` the package *does*
+carry the ingest assembly and its plug-in type, which is a handler nothing calls until a
+host registers a step against it.
 **Installing this release does not send notifications, and writes no rows into the
 tables it installs.** The control records who was mentioned; turning that into a row,
 and that row into a message, is the server-side work still ahead.
@@ -435,7 +441,7 @@ Running them from inside `pcf/` works too — there, use plain `npm ci`.
 ├── powerplatform/          # Dataverse solution project and source
 │   ├── AyontoMentionSolution.cdsproj
 │   └── src/                # classic SolutionPackager XML: Entities/, Other/
-├── server/                 # the Dataverse plug-in ingest, net48, and its tests
+├── server/                 # the Dataverse plug-in ingest, net48, shipped from 1.2.0.0
 │   ├── Ayonto.Mention.Ingest/
 │   └── Ayonto.Mention.Ingest.Tests/
 ├── docs/
