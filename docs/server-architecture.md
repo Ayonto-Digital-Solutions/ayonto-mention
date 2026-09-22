@@ -25,6 +25,13 @@ while; the second is the legacy product's, it is user-owned, and its columns car
 recipient's name and address. The new ledger is `ayonto_mentionevent`, the ingest
 targets only that, and a test reads the ingest's own sources to keep it that way.
 
+**Which matters when reading a live environment.** Neither half of this product writes
+`ayonto_mention`: the control makes no `createRecord` call against either table, and
+the ingest is not in a package and is registered nowhere. The legacy control does write
+it, directly from the browser. So a fresh `ayonto_mention` row appearing after a save is
+evidence that the legacy writer is still on that form — not evidence that anything here
+ran.
+
 **The table has now been through a real import.** `v1.1.0.2` managed was imported
 into the neutral Ayonto development environment and accepted, which is what proved
 the `OrgOwned` serialization corrected after v1.1.0.1's `0x80044150` rejection. The
@@ -437,6 +444,37 @@ in-app. **Not one shared status for all three** — one column cannot mean both
 reports only the first channel is worse than none, because it reads as success.
 
 The delivery table itself is later work and is not designed here.
+
+### The event table is not the companion column's replacement
+
+Worth stating plainly, because the two are easy to read as one thing and a release
+that adds the second can look like it should have removed the first.
+
+| | `mentionMetadata` on the source record | `ayonto_mentionevent` |
+|---|---|---|
+| When | **inside** the record's own save | **after** the record is committed |
+| Written by | the control, as a bound output | the server ingest, as SYSTEM |
+| What it is for | carrying `eventId`, `recipientUserId` and the occurrence positions across the save, and reading a saved record back as people | the product's record that a notification is owed, with its configuration snapshot |
+| Who may write it | anybody who may write the source text | the trusted ingest only |
+
+They are not alternatives. The companion column is the **identity bridge**: without it,
+nothing survives the save that says *which* Robin Fox was meant, and reopening the
+record cannot draw the mentions it contains. The event table is the **post-save
+ledger**: it cannot exist before the save, which is the whole reason the commit
+boundary holds.
+
+So the maker-facing "Mention metadata Column" does not disappear because the event
+table arrived. Making the property `required="false"` would hide the requirement in the
+form designer and lose `eventId` and `recipientUserId` the moment somebody saved
+without a column bound — a worse product with a tidier configuration screen. The
+framework's own position is that a bound property expects a column, and that an
+imported component may make a property optional in a later version but not remove one.
+
+**What would actually retire it** is a supported mechanism that keeps all four
+properties — recipient identity, `eventId`, readback identity, and the save as the
+commit boundary — without a hand-configured column. That mechanism is not chosen yet.
+Custom events exist in the framework but are documented as preview, and this product
+does not build its identity bridge on a preview surface.
 
 ### The companion metadata transition
 

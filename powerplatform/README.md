@@ -265,12 +265,17 @@ connection, because nothing in it needs one.
 
 **The missing plug-in assembly is a packaging gate rather than missing code.** The
 server-side ingest is implemented and unit-tested in [`../server`](../server/README.md),
-and this solution is where its assembly belongs. It is not here because
-SolutionPackager will not pack an assembly without the registration configuration
-that names it, and that configuration is an export artifact from an environment where
-the assembly has been registered. The exact error, and the ordered list of what
-unblocks it, are in [`../server/README.md`](../server/README.md). Hand-writing that
-XML is the other way through, and it is the one the rule above refuses.
+and this solution is where its assembly belongs. It is not here because SolutionPackager
+will not pack an assembly without the registration configuration that names it — a
+`PluginAssemblies/<Name>-<id>/<Name>.dll.data.xml` in this tree, alongside a
+`type="91"` root component.
+
+That configuration is **ordinary committed source**, not an environment artifact: a real
+Microsoft solution ships exactly that shape, and adding it here was verified to put the
+assembly into both packages, with the binary still supplied by the project reference
+rather than committed. What it costs is three pinned component identifiers, which is a
+product decision rather than a packaging step — see
+[`../server/README.md`](../server/README.md).
 
 So: this package installs the table the ingest writes to, and carries nothing that
 writes to it. The dispatcher and every delivery channel in

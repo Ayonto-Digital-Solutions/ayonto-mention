@@ -20,7 +20,7 @@ This file is about the code and about what still has to happen in an environment
 | The ingest pipeline, to the point of creating an event row | **implemented, unit-tested** |
 | `ayonto_EventId` uniqueness, so two concurrent jobs cannot write one event twice | **in the solution source** as an alternate key; **not yet imported anywhere** |
 | Strong-named assembly, which registering a standalone assembly requires | **done**, and the identity is pinned by a test |
-| Packaging the assembly into the `AyontoMention` solution | **blocked by a Microsoft tooling defect** — see below, with the exact error |
+| Packaging the assembly into the `AyontoMention` solution | **unblocked and not yet done** — one committed registration file is missing; verified to work, and the pinned identifiers need a decision first |
 | Registering the two steps on a host table | **host-owned**, and nothing here can do it |
 | Dispatcher, e-mail, Teams, in-app, per-channel delivery state | **not started** |
 
@@ -171,96 +171,106 @@ dotnet build server/Ayonto.Mention.Ingest/Ayonto.Mention.Ingest.csproj -c Releas
 dotnet test  server/Ayonto.Mention.Ingest.Tests/Ayonto.Mention.Ingest.Tests.csproj  # Windows
 ```
 
-## Packaging: a confirmed tooling defect, twice attempted
+## Packaging: what was actually missing
 
-**The assembly is not in the solution package.** The documented mechanism was
-followed to the end, twice, in both of the configurations Microsoft's own tooling
-produces — and it fails at the same place both times. Attempting it a third way is
-not the next useful thing to do.
+**The assembly is still not in the solution package, and the reason turned out not to
+be the one recorded here before.** It is not a Microsoft defect in our case, and it is
+not something only a Dataverse environment can produce. It is one file that nobody had
+written.
 
-`pac solution add-reference` is the supported way to put a plug-in project into a
-solution project: *"if you want to associate a newly created plug-in with this
-solution … you can use the `pac solution add-reference` command to update the
-`.cdsproj` file to add the new plug-in"*
-([pac solution](https://learn.microsoft.com/power-platform/developer/cli/reference/solution)).
-Running it against this project writes the reference, and the solution build then
-gets two steps further and stops:
+### What the earlier attempts got wrong
 
-1. **NuGet refuses the reference across frameworks.**
+`pac solution add-reference` is the documented way to put a plug-in project into a
+solution project, and running it produces this, twice, in both configurations the
+current tooling generates:
 
-   ```
-   error NU1201: Project Ayonto.Mention.Ingest is not compatible with net462.
-   Project Ayonto.Mention.Ingest supports: net48
-   ```
+```
+error NU1201: Project Ayonto.Mention.Ingest is not compatible with net462.
+error : Unable to find assembly registration configuration for Ayonto.Mention.Ingest.dll
+        in the destination: obj/Release/Metadata/PluginAssemblies
+```
 
-   `AyontoMentionSolution.cdsproj` declares `net462`, which is what
-   `pac solution init` writes. Raising it to `net48` clears this, and was verified
-   to clear it.
+The first is the `cdsproj` declaring `net462` against a `net48` plug-in; raising it
+clears that. The second was read as a tooling defect. It is not: it is the solution
+targets saying that the solution **source** carries no registration configuration for
+the assembly they were handed — and that configuration is ordinary committed source,
+not an export secret.
 
-2. **SolutionPackager needs a registration configuration that does not exist yet.**
+### What a real Microsoft solution does
 
-   ```
-   error : Unable to find assembly registration configuration for
-   .../Ayonto.Mention.Ingest.dll in the destination: obj/Release/Metadata/PluginAssemblies
-   ```
+`microsoft/powercat-automation-kit` ships a plug-in inside a solution, and its
+committed source has exactly two things for it:
 
-   The solution targets look for `PluginAssemblies/**/*.dll.data.xml` in the
-   solution source and match it to the assembly by full name. That file is an
-   **export artifact**: it carries the `PluginAssembly` and `PluginType` identifiers
-   a Dataverse environment assigned when the assembly was registered there.
+```
+src/PluginAssemblies/AutomationKitAuditFtechAPI-041FE709-…-5B55FCA0E7D6/
+    AutomationKitAuditFtechAPI.dll          ← the built assembly
+    AutomationKitAuditFtechAPI.dll.data.xml ← the registration configuration
+src/Other/Solution.xml
+    <RootComponent type="91" id="{041fe709-…}" schemaName="AutomationKitAuditFtechAPI, Version=…, PublicKeyToken=…" />
+```
 
-**Both routes were tried, with the versions the current toolchain actually
-resolves.** `pac` 2.12.1's own `pac plugin init` template asks for
-`Microsoft.PowerApps.MSBuild.Plugin` `1.*`, which resolves to 1.52.1, the same
-generation as the solution project's `Microsoft.PowerApps.MSBuild.Solution` `1.*`.
-The second attempt used that template's plug-in **package** configuration —
-`GeneratePackageOnBuild` on, so the build also produces the NuGet package the
-dependent-assemblies capability uses — and the solution build failed with the
-identical error. That is consistent with what the solution targets contain: the
-MSBuild task that processes a project reference looks for `PluginAssemblies` and
-`*dll.data.xml` and has no notion of a plug-in package at all.
+The `.dll.data.xml` names the assembly's full name, its `PluginAssemblyId`, and each
+`PluginType` with its own `PluginTypeId` and `FriendlyName`. Those identifiers are
+**pinned component ids**, the same kind of value this repository already pins for the
+event table's saved query — not something an environment has to mint first.
 
-So the reference is **not** committed, and the `cdsproj` is unchanged: leaving a
-reference in place that fails the build would break the release workflow, which
-packs the solution on every pull request. Hand-writing the missing XML is the other
-way through, and it is the one this repository refuses — *"Do not hand-author table
-metadata in this tree"*, for the reason that hand-written metadata drifts from the
-schema and breaks import. The `ayonto_mentionevent` table is the one documented
-exception, and it is derived by a committed script from a real export rather than
-typed.
+**And the plug-in *package* route is a dead end, which is worth recording so nobody
+tries it again.** That same repository also carries
+`src/pluginpackages/*/pluginpackage.xml` files, which look like a GUID-free
+source-only alternative. They are vestigial: no `.nupkg` is committed next to them, no
+`RootComponent` mentions them, and Microsoft's own **released** managed solution
+contains no `.nupkg` and no `pluginpackages` entry at all — only
+`PluginAssemblies/…/….dll`. The MSBuild task that processes a project reference has no
+notion of a plug-in package either; it looks for `PluginAssemblies` and
+`*dll.data.xml`.
 
-**What that means for the version number.** The built package carries no server
-component, so this work is not released as a server release. The solution version is
-`1.1.0.3` — a revision on top of the `1.1.0.2` that a real environment imported, and
-the package genuinely does differ from it by the alternate key. It is deliberately
-**not** `1.2.0.0`: a minor version would read as "the server ships now", and it does
-not. Reusing `1.1.0.2` was the other option and is worse — that version is published,
-and two different packages under one version is exactly what this repository's release
-workflow refuses to allow.
+### Verified: adding that one file completes the documented mechanism
 
-### What unblocks it, in order
+Tried as a scratch experiment on this branch and then reverted, with the registration
+configuration derived from the Microsoft export above and pinned identifiers:
 
-1. Register the assembly in the Ayonto DEV environment — the Plug-in Registration
-   tool, or `pac plugin push`.
-2. Add it to the unmanaged `AyontoMention` solution there and export.
-3. Take the exported `PluginAssemblies/…/Ayonto.Mention.Ingest.dll.data.xml` into
-   `powerplatform/src/`, unchanged.
-4. Raise the `cdsproj` to `net48` and add the project reference with
+```
+PluginAssemblies/Ayonto.Mention.Ingest-…/Ayonto.Mention.Ingest.dll   47 616 bytes
+<SolutionPluginAssemblies> … 1 assembly
+<PluginType Name="Ayonto.Mention.Ingest.MentionIngestPlugin">
+<RootComponent type="91" …>
+```
+
+in **both** the managed and the unmanaged package, with both tables, the alternate key
+and the code component still present. The assembly reached the package **without
+being committed**: the `ProjectReference` supplies the freshly built binary, so CI
+still builds what ships and only the registration XML is source.
+
+### The decision this leaves
+
+Committing that file means committing three pinned GUIDs derived from a Microsoft
+export rather than exported from an Ayonto environment. That is the same discipline the
+event table already follows, and it is deliberately **not** done unilaterally: a
+`PluginAssemblyId` is fixed for the life of the product in every environment that ever
+imports it.
+
+Once it is decided, the remaining work is small and ordered:
+
+1. Commit `powerplatform/src/PluginAssemblies/Ayonto.Mention.Ingest-<id>/Ayonto.Mention.Ingest.dll.data.xml`
+   and the `type="91"` `RootComponent`, ideally generated by a committed script the way
+   the event table is, so the identifiers cannot drift.
+2. Raise the `cdsproj` to `net48` and add the reference with
    `pac solution add-reference --path ../server/Ayonto.Mention.Ingest`.
-5. Flip `PLUGIN_ASSEMBLY_REQUIRED` to `True` in
-   `.github/scripts/check-release-package.py`. The expectation is already written
-   there in full: exactly this assembly, exactly one plug-in type, and no SDK
-   message processing step — a step names a host table, and this solution is
-   reusable.
-6. Then, and only then, the solution version becomes a minor one: the package
-   carries a server component for the first time.
+3. Flip `PLUGIN_ASSEMBLY_REQUIRED` to `True`. The expectation is already written out in
+   full: exactly this assembly, exactly one plug-in type, and no SDK message processing
+   step — a step names a host table, and this solution is reusable.
+4. Then, and only then, a minor solution version: the package carries a server
+   component for the first time.
 
-Steps 1 to 3 need an environment. Steps 4 to 6 are one commit once they are done.
+### Assembly version numbers are a registration contract
 
-The alternative worth watching rather than working around: the defect is in the
-solution project's plug-in handling, so a later
-`Microsoft.PowerApps.MSBuild.Solution` may simply fix it. Re-running step 4 against a
-newer package is a cheap thing to retry; inventing registration XML is not.
+Worth knowing before anybody raises `AssemblyVersion` from `1.0.0.0`. Microsoft:
+changing **build or revision** is "an in-place upgrade … Any pre-existing steps from
+the older solution are automatically changed to refer to the newer version"; changing
+**major or minor** makes it "a different assembly than the previous version", and
+"Plug-in registration steps in the existing solution will continue to refer to the
+previous version" until somebody re-points them by hand. So the fixed `1.0.0.0` here is
+a decision, and the safe way to ship a code change later is the third or fourth part.
 
 ## The registration a host has to make
 
@@ -268,6 +278,22 @@ Two steps per mention-enabled source table, registered against the plug-in type
 this solution supplies. The steps belong to the **host** solution: a step names the
 host's own table, and this base solution is reusable and must never contain a
 customer's table name.
+
+**That is a product boundary, not a packaging gap, and it was checked rather than
+assumed.** The four ways out of it are all closed:
+
+| | |
+|---|---|
+| A base-solution step with no primary entity, to stay host-neutral? | **No.** "If a primary entity isn't specified for core messages like `Update`, `Delete`, `Retrieve`, and `RetrieveMultiple`, or any message that can be applied, the plug-in will be invoked for all entities that support that message" — an asynchronous step like this one would queue a system job for every record write in the environment |
+| Filtering attributes to narrow that down? | **No.** They apply "when you set the primary entity", so a global step forfeits the one mechanism that would make it affordable |
+| A base solution carrying a step for a table it does not know yet? | **No.** A step *is* the message-and-table registration, and it is "a solution component" that travels in the solution that declares it |
+| The assembly and the steps in different solutions? | **Yes**, and that is the design: a solution may contain a step while "another solution containing the assembly is already installed" |
+
+So host onboarding requires **one `Create` and one `Update` step per mention-enabled
+host table**. Shipping a global step to avoid that would trade one declaration per host
+table for an asynchronous job on every write in the tenant, which is not a trade this
+product will make.
+https://learn.microsoft.com/power-apps/developer/data-platform/register-plug-in
 
 Plug-in type: `Ayonto.Mention.Ingest.MentionIngestPlugin`
 
