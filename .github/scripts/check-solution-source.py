@@ -44,6 +44,9 @@ from typing import NamedTuple
 ROOT = Path(os.environ.get("SOLUTION_SOURCE") or Path(__file__).resolve().parents[2] / "powerplatform")
 SRC = ROOT / "src"
 ENTITY_COMPONENT_TYPE = "1"
+#: Type 91 is a plug-in assembly, 90 a plug-in type. See the solution component type table.
+PLUGIN_ASSEMBLY_COMPONENT_TYPE = "91"
+PLUGIN_TYPE_COMPONENT_TYPE = "90"
 
 SOLUTION_UNIQUE_NAME = "AyontoMention"
 PUBLISHER_UNIQUE_NAME = "Ayonto"
@@ -310,7 +313,27 @@ def check_manifest() -> set[str]:
                 f"Solution.xml declares no <RootComponent type=\"1\"> for {table.logical!r} — "
                 "the table would pack without ever being part of the solution, and nothing would say so"
             )
-    return declared
+
+    # Type 91 is a plug-in assembly, and its schemaName is the full assembly identity.
+    # There is deliberately no type 90 here: a plug-in type is declared inside the
+    # assembly's registration rather than as a root component of its own.
+    assemblies = {
+        component.get("schemaName", "")
+        for component in section.iter("RootComponent")
+        if component.get("type") == PLUGIN_ASSEMBLY_COMPONENT_TYPE
+    }
+    strays = sorted(
+        component.get("type", "")
+        for component in section.iter("RootComponent")
+        if component.get("type") == PLUGIN_TYPE_COMPONENT_TYPE
+    )
+    if strays:
+        fail(
+            "Solution.xml declares a type 90 root component. A plug-in type belongs inside "
+            "the assembly's registration, not in RootComponents"
+        )
+
+    return declared, assemblies
 
 
 def check_tables(declared: set[str]) -> None:
@@ -328,6 +351,114 @@ def check_tables(declared: set[str]) -> None:
             fail(f"src/Entities has no {table.folder} folder — this release is supposed to carry that table")
         else:
             print(f"  table {table.logical}: not in the solution source yet")
+
+
+#: The ingest assembly's registration, as the generator pins it. Stated here rather
+#: than imported from the generator: a checker that takes its expectations from the
+#: thing it is checking agrees with every drift, including the drift nobody meant.
+PLUGIN_ASSEMBLY_NAME = "Ayonto.Mention.Ingest"
+PLUGIN_ASSEMBLY_FULL_NAME = (
+    "Ayonto.Mention.Ingest, Version=1.0.0.0, Culture=neutral, "
+    "PublicKeyToken=0e66244ba4f12435"
+)
+PLUGIN_TYPE_NAME = "Ayonto.Mention.Ingest.MentionIngestPlugin"
+PLUGIN_TYPE_QUALIFIED_NAME = f"{PLUGIN_TYPE_NAME}, {PLUGIN_ASSEMBLY_FULL_NAME}"
+PLUGIN_ASSEMBLY_ID = "a55a415c-e993-455c-ae92-eb232bb0c23e"
+PLUGIN_TYPE_ID = "61728de5-8d02-493b-8603-4e5cf9c7a10c"
+PLUGIN_TYPE_FRIENDLY_NAME = "9fa5e208-42b6-4708-917f-20ca989c9602"
+PLUGIN_FOLDER_NAME = f"{PLUGIN_ASSEMBLY_NAME}-{PLUGIN_ASSEMBLY_ID.upper()}"
+PLUGIN_PACKAGED_DLL_PATH = (
+    f"/PluginAssemblies/{PLUGIN_FOLDER_NAME}/{PLUGIN_ASSEMBLY_NAME}.dll"
+)
+
+
+def check_plugin_registration(declared_root_components: set[str]) -> None:
+    """The ingest assembly's registration source, and the absence of its binary.
+
+    Two failures this guards against, and they fail in opposite directions.
+
+    Without this file the solution build stops — "Unable to find assembly registration
+    configuration" — so a drift here is loud. What is quiet is a *wrong* file: an
+    identifier that changed makes the next import a different component rather than an
+    update of this one, and every registered step in every environment keeps pointing at
+    the assembly that is no longer there. So the pinned values are asserted, not merely
+    parsed.
+
+    The other direction is the assembly itself. It must **not** be committed: the
+    project reference supplies the binary the solution packs, so what ships is what CI
+    built. A checked-in DLL would be shipped instead, silently, and would go stale the
+    first time somebody changed the code.
+    """
+    folder = SRC / "PluginAssemblies"
+    if not folder.is_dir():
+        fail("src/PluginAssemblies is missing — the ingest assembly has no registration source")
+
+    registrations = sorted(child for child in folder.iterdir() if child.is_dir())
+    if [child.name for child in registrations] != [PLUGIN_FOLDER_NAME]:
+        fail(
+            f"src/PluginAssemblies holds {[c.name for c in registrations]}, expected exactly "
+            f"[{PLUGIN_FOLDER_NAME!r}] — the folder name carries the pinned assembly identifier"
+        )
+
+    registration = registrations[0]
+    binaries = sorted(
+        child.name for child in registration.iterdir() if child.suffix.lower() == ".dll"
+    )
+    if binaries:
+        fail(
+            f"src/PluginAssemblies/{registration.name} carries the compiled assembly "
+            f"{binaries[0]!r}. Only the registration configuration belongs in this tree: the "
+            "solution project's reference supplies the binary, so the package ships what CI "
+            "built rather than whatever was last committed"
+        )
+
+    data_file = registration / f"{PLUGIN_ASSEMBLY_NAME}.dll.data.xml"
+    if not data_file.is_file():
+        fail(f"{data_file.relative_to(SRC.parent)} is missing")
+
+    root = ET.parse(data_file).getroot()
+    if root.tag != "PluginAssembly":
+        fail(f"{data_file.name} describes <{root.tag}>, expected <PluginAssembly>")
+
+    checks = [
+        ("FullName", root.get("FullName"), PLUGIN_ASSEMBLY_FULL_NAME),
+        ("PluginAssemblyId", (root.get("PluginAssemblyId") or "").lower(), PLUGIN_ASSEMBLY_ID),
+        ("FileName", root.findtext("FileName"), PLUGIN_PACKAGED_DLL_PATH),
+        ("IsolationMode", root.findtext("IsolationMode"), "2"),
+        ("SourceType", root.findtext("SourceType"), "0"),
+    ]
+    for name, found, expected in checks:
+        if found != expected:
+            fail(f"{data_file.name}: {name} is {found!r}, expected {expected!r}")
+
+    types = root.findall("PluginTypes/PluginType")
+    if len(types) != 1:
+        fail(f"{data_file.name} declares {len(types)} plug-in types, expected exactly one")
+
+    plugin_type = types[0]
+    for name, found, expected in [
+        ("Name", plugin_type.get("Name"), PLUGIN_TYPE_NAME),
+        ("AssemblyQualifiedName", plugin_type.get("AssemblyQualifiedName"), PLUGIN_TYPE_QUALIFIED_NAME),
+        ("PluginTypeId", (plugin_type.get("PluginTypeId") or "").lower(), PLUGIN_TYPE_ID),
+        ("FriendlyName", plugin_type.findtext("FriendlyName"), PLUGIN_TYPE_FRIENDLY_NAME),
+    ]:
+        if found != expected:
+            fail(f"{data_file.name}: PluginType {name} is {found!r}, expected {expected!r}")
+
+    # The root component, and only type 91. A plug-in type is not a root component: it
+    # is declared inside the registration above, which is what the real Microsoft
+    # solution source does and what this repository's build produces.
+    if PLUGIN_ASSEMBLY_FULL_NAME not in declared_root_components:
+        fail(
+            "Solution.xml declares no type 91 root component for "
+            f"{PLUGIN_ASSEMBLY_FULL_NAME!r} — an assembly no RootComponent mentions packs "
+            "without being part of the solution"
+        )
+
+    print(
+        f"  plug-in {PLUGIN_ASSEMBLY_NAME}: registration only, type {PLUGIN_TYPE_NAME}, "
+        f"assembly id {PLUGIN_ASSEMBLY_ID}"
+    )
 
 
 def read_alternate_keys(root: ET.Element) -> dict[str, tuple[str, ...]]:
@@ -571,8 +702,9 @@ def main() -> None:
     if not SRC.is_dir():
         fail(f"{SRC} does not exist")
     files = check_xml_well_formed()
-    declared = check_manifest()
+    declared, assemblies = check_manifest()
     check_tables(declared)
+    check_plugin_registration(assemblies)
     check_relationships()
     check_customizations()
     print(f"solution source: {files} XML file(s) checked, {SOLUTION_UNIQUE_NAME} contract holds")

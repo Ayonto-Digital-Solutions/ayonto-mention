@@ -7,13 +7,15 @@ v1.1.0 the solution package installs the central `ayonto_mention` table, and the
 1.1.0.1 candidate adds the product's own `ayonto_mentionevent` alongside it: both
 schemas are in the package.
 
-**The ingest described below is now implemented in code.** It lives in
-[`server/`](../server/README.md) as a net48 plug-in assembly with unit tests, and it
-creates `ayonto_mentionevent` rows and nothing else. What it has not done is run:
-the assembly is not in the solution package yet, no step is registered anywhere, and
-no event row has ever been created in a Dataverse environment. The reason the
-assembly is not packaged is a prerequisite only an environment can produce, and it is
-written down in [`server/README.md`](../server/README.md) rather than glossed here.
+**The ingest described below is implemented and, from solution `1.2.0.0`, shipped.**
+It lives in [`server/`](../server/README.md) as a net48 plug-in assembly with unit
+tests, it creates `ayonto_mentionevent` rows and nothing else, and both the managed and
+the unmanaged package now carry it along with its plug-in type.
+
+What it has still not done is **run**. The base solution carries the assembly; it
+carries no step, because a step names a host table and therefore belongs to the host
+application's own solution. So importing this package registers a handler that nothing
+calls yet, and no event row has ever been created in a Dataverse environment.
 
 The dispatcher and every delivery channel described below are still designed and
 unbuilt, so a mention still becomes a bound output on a business record and stops
@@ -110,12 +112,12 @@ and reusing another product's table is not the target.
 
 ### Two version numbers, and they are not the same number
 
-The target Dataverse solution and release version is **`1.1.0.3`** — a revision on
-top of the `1.1.0.2` a real environment imported, because what the package gained
-since is the ledger's alternate key and nothing else. It is deliberately not a minor
-version: the server-side ingest exists in this repository but not in the package, so
-a number that read as "the server ships now" would be a claim rather than a version.
-See [`server/README.md`](../server/README.md).
+The target Dataverse solution and release version is **`1.2.0.0`**. A minor step, and
+this time the number means what it says: the package carries a server component for the
+first time. `1.1.0.3` was the revision before it, which added the ledger's alternate key
+and deliberately stopped short of a minor version while the ingest was still only in the
+repository. What `1.2.0.0` does **not** claim is a registered step or a delivered
+notification — see [`server/README.md`](../server/README.md).
 
 That is an ordinary solution version, not an unusual one. *"A solution's version
 has the following format: major.minor.build.revision"*, and the article's own
@@ -508,7 +510,7 @@ implemented, and nothing here should be read as saying it is.
 |---|---|---|
 | Code component | `Ayonto.AyontoMentionControl` | unchanged |
 | Product table | the legacy-derived table, **UserOwned**, plus `ayonto_mentionevent`, **Organization-owned** — import-proven by the real `v1.1.0.2` managed import; its new alternate key is not | `ayonto_mentionevent` alone, once the legacy table is retired |
-| Ingest | implemented in code under `server/`, not packaged, not registered, never run | async PostOperation step, host-registered |
+| Ingest | the assembly ships from 1.2.0.0; no step is registered and it has never run | async PostOperation step, host-registered |
 | Dispatcher | none | one universal solution-aware flow, in its own central automation solution |
 | Delivery | none | e-mail · Teams · in-app, state per channel |
 | Maker notification config | the twelve manifest settings exist; the server-side resolution is implemented in code | set on the component, resolved server-side from published `FormXml` per `recordTable + sourceField` |
@@ -527,7 +529,7 @@ flowchart TD
     pcf --> meta["bound output: companion metadata"]
     text --> save["Source-record save"]
     meta --> save
-    save -.-> step["async PostOperation step<br/>on the host source table<br/>(implemented, not registered)"]
+    save -.-> step["async PostOperation step<br/>on the host source table<br/>(assembly shipped, step host-owned)"]
     step -.-> ledger["ayonto_mentionevent<br/>(imported and accepted as of v1.1.0.2;<br/>its alternate key is newer)"]
     ledger -.-> dispatcher["planned: dispatcher"]
     dispatcher -.-> channels["planned: e-mail · Teams · in-app"]
@@ -537,10 +539,11 @@ Solid arrows exist today. Dotted ones do not — including the two around the st
 whose code exists while nothing registers or calls it. The ledger box is a table the
 package carries; the dispatcher and the channels are not written at all.
 
-**Packaged is not imported, and implemented is not registered.** A table in a
-solution says nothing about anything writing to it. Code that creates event rows
-says nothing about a step existing anywhere that would call it. This document should
-not be read as if either had happened.
+**Packaged is not imported, and shipped is not registered.** A table in a solution says
+nothing about anything writing to it, and an assembly in a solution says nothing about a
+step existing anywhere that would call it. Both halves of that are true of this package:
+it carries the ingest and registers nothing. This document should not be read as if
+either had happened.
 
 ## Two solutions, and why
 
@@ -557,9 +560,8 @@ Owns everything that is the same for every host:
   reused unchanged from that product's export and shipped since v1.1.0;
   **targeted** to become the product-owned `ayonto_mentionevent` described in
   Target architecture above
-- the plug-in assembly and plug-in types — **the assembly exists in
-  [`server/`](../server/README.md); packaging it into this solution is blocked on a
-  registration configuration only an environment produces**
+- the plug-in assembly and its plug-in type — **shipped from solution 1.2.0.0**, built
+  from [`server/`](../server/README.md) and declared by a committed registration source
 - the security components the ledger needs
 - later: the dispatcher and per-channel delivery state
 

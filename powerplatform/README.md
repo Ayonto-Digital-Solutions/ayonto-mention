@@ -259,23 +259,30 @@ changed to avoid taking that test.
 
 ## What this solution does not carry
 
-No flows, no plug-in assemblies, no SDK message processing steps, no connection
-references, no environment variables, no security roles. The import asks for no
-connection, because nothing in it needs one.
+No flows, no SDK message processing steps, no connection references, no environment
+variables, no security roles. The import asks for no connection, because nothing in it
+needs one.
 
-**The missing plug-in assembly is a packaging gate rather than missing code.** The
-server-side ingest is implemented and unit-tested in [`../server`](../server/README.md),
-and this solution is where its assembly belongs. It is not here because SolutionPackager
-will not pack an assembly without the registration configuration that names it — a
-`PluginAssemblies/<Name>-<id>/<Name>.dll.data.xml` in this tree, alongside a
-`type="91"` root component.
+**It does carry the plug-in assembly from 1.2.0.0**, built from
+[`../server`](../server/README.md) through the solution project's reference, with its
+registration generated into `src/PluginAssemblies/` by
+`tools/powerplatform/generate-mention-ingest-registration.py`. The binary is not
+committed. What it still does not carry is a **step**: a step names the host table it is
+registered against, so it belongs to the host application's solution — one `Create` and
+one `Update` per mention-enabled table. This solution therefore installs a handler that
+nothing calls yet.
 
-That configuration is **ordinary committed source**, not an environment artifact: a real
-Microsoft solution ships exactly that shape, and adding it here was verified to put the
-assembly into both packages, with the binary still supplied by the project reference
-rather than committed. What it costs is three pinned component identifiers, which is a
-product decision rather than a packaging step — see
-[`../server/README.md`](../server/README.md).
+**How the assembly gets here.** SolutionPackager will not pack one without the
+registration configuration that names it — a
+`PluginAssemblies/<Name>-<id>/<Name>.dll.data.xml` in this tree, alongside a `type="91"`
+root component whose `schemaName` is the full assembly identity. That configuration is
+ordinary committed source, not an environment artifact, and a real Microsoft solution
+ships exactly that shape.
+
+It is generated rather than typed, and the three identifiers in it are pinned: a changed
+`PluginAssemblyId` makes the next import a different component rather than an update of
+this one. The generator-drift gate in CI is what keeps a hand edit from doing that
+quietly. See [`../server/README.md`](../server/README.md).
 
 So: this package installs the table the ingest writes to, and carries nothing that
 writes to it. The dispatcher and every delivery channel in
