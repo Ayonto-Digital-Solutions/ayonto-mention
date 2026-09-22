@@ -318,7 +318,7 @@ def check_manifest() -> set[str]:
     # There is deliberately no type 90 here: a plug-in type is declared inside the
     # assembly's registration rather than as a root component of its own.
     assemblies = {
-        component.get("schemaName", "")
+        component.get("schemaName", ""): component.get("behavior")
         for component in section.iter("RootComponent")
         if component.get("type") == PLUGIN_ASSEMBLY_COMPONENT_TYPE
     }
@@ -367,12 +367,16 @@ PLUGIN_ASSEMBLY_ID = "a55a415c-e993-455c-ae92-eb232bb0c23e"
 PLUGIN_TYPE_ID = "61728de5-8d02-493b-8603-4e5cf9c7a10c"
 PLUGIN_TYPE_FRIENDLY_NAME = "9fa5e208-42b6-4708-917f-20ca989c9602"
 PLUGIN_FOLDER_NAME = f"{PLUGIN_ASSEMBLY_NAME}-{PLUGIN_ASSEMBLY_ID.upper()}"
+#: Include Subcomponents. The plug-in types are the subcomponents of an assembly, and
+#: they have to travel with it: 1 leaves them behind, 2 ships a shell. The Microsoft
+#: export and the managed solution released from it both carry 0.
+PLUGIN_ROOT_BEHAVIOR = "0"
 PLUGIN_PACKAGED_DLL_PATH = (
     f"/PluginAssemblies/{PLUGIN_FOLDER_NAME}/{PLUGIN_ASSEMBLY_NAME}.dll"
 )
 
 
-def check_plugin_registration(declared_root_components: set[str]) -> None:
+def check_plugin_registration(declared_root_components: dict[str, str | None]) -> None:
     """The ingest assembly's registration source, and the absence of its binary.
 
     Two failures this guards against, and they fail in opposite directions.
@@ -453,6 +457,15 @@ def check_plugin_registration(declared_root_components: set[str]) -> None:
             "Solution.xml declares no type 91 root component for "
             f"{PLUGIN_ASSEMBLY_FULL_NAME!r} — an assembly no RootComponent mentions packs "
             "without being part of the solution"
+        )
+
+    behavior = declared_root_components[PLUGIN_ASSEMBLY_FULL_NAME]
+    if behavior != PLUGIN_ROOT_BEHAVIOR:
+        fail(
+            f"the plug-in root component's behavior is {behavior!r}, expected "
+            f"{PLUGIN_ROOT_BEHAVIOR!r} — Include Subcomponents, which is what carries the "
+            "plug-in types along with the assembly. 1 leaves them behind and 2 ships a "
+            "shell, and either would install a handler no step could be pointed at"
         )
 
     print(

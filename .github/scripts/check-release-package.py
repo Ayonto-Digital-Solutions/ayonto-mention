@@ -101,9 +101,18 @@ PLUGIN_ASSEMBLY_FULL_NAME = (
     "PublicKeyToken=0e66244ba4f12435"
 )
 
-#: The pinned component identifier, so the check is about this assembly rather than any
-#: assembly wearing its name.
+#: The pinned component identifiers, so the checks are about this assembly and this
+#: handler rather than anything wearing their names. A changed identifier makes the next
+#: import a different component, and the package is the last place that can be noticed.
 PLUGIN_ASSEMBLY_ID = "a55a415c-e993-455c-ae92-eb232bb0c23e"
+PLUGIN_TYPE_ID = "61728de5-8d02-493b-8603-4e5cf9c7a10c"
+PLUGIN_TYPE_FRIENDLY_NAME = "9fa5e208-42b6-4708-917f-20ca989c9602"
+PLUGIN_TYPE_QUALIFIED_NAME = f"{PLUGIN_TYPE_NAME}, {PLUGIN_ASSEMBLY_FULL_NAME}"
+
+#: Include Subcomponents: the plug-in types travel with the assembly. 1 leaves them
+#: behind and 2 ships a shell, and either would install a handler no host step could be
+#: pointed at. The Microsoft export and the solution released from it both carry 0.
+PLUGIN_ROOT_BEHAVIOR = "0"
 
 #: The tables this package installs.
 #:
@@ -628,15 +637,32 @@ def check_plugin(
             "the next import a different component rather than an update of this one"
         )
 
-    types = sorted(
-        (plugin_type.get("Name") or "") for plugin_type in assembly.iter("PluginType")
-    )
+    declared_types = list(assembly.iter("PluginType"))
+    types = sorted((plugin_type.get("Name") or "") for plugin_type in declared_types)
     if types != [PLUGIN_TYPE_NAME]:
         raise PackageError(
             f"the packaged assembly declares the plug-in types {types}, expected exactly "
             f"[{PLUGIN_TYPE_NAME!r}] — the ingest is one handler, and a type nobody named "
             "is a handler nobody reviewed"
         )
+
+    # The handler's whole identity, read out of the package rather than out of the
+    # source it was built from. A host step is registered against this type, so an
+    # identifier that drifted here is a step that cannot be pointed at anything.
+    plugin_type = declared_types[0]
+    for label, found, expected in (
+        (
+            "AssemblyQualifiedName",
+            plugin_type.get("AssemblyQualifiedName"),
+            PLUGIN_TYPE_QUALIFIED_NAME,
+        ),
+        ("PluginTypeId", (plugin_type.get("PluginTypeId") or "").strip().lower(), PLUGIN_TYPE_ID),
+        ("FriendlyName", plugin_type.findtext("FriendlyName"), PLUGIN_TYPE_FRIENDLY_NAME),
+    ):
+        if found != expected:
+            raise PackageError(
+                f"the packaged plug-in type's {label} is {found!r}, expected {expected!r}"
+            )
 
     # Steps belong to the host solution, not to this one. "Sdk Message Processing
     # Steps are also solution components and must also be added to an unmanaged
@@ -679,6 +705,12 @@ def check_plugin(
         raise PackageError(
             f"the plug-in root component's schemaName is {root.get('schemaName')!r}, "
             f"expected the full assembly identity {PLUGIN_ASSEMBLY_FULL_NAME!r}"
+        )
+    if root.get("behavior") != PLUGIN_ROOT_BEHAVIOR:
+        raise PackageError(
+            f"the plug-in root component's behavior is {root.get('behavior')!r}, expected "
+            f"{PLUGIN_ROOT_BEHAVIOR!r} — Include Subcomponents, which is what carries the "
+            "plug-in types along with the assembly"
         )
 
     return plugin_paths, frozenset(

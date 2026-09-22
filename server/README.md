@@ -18,7 +18,7 @@ This file is about the code and about what still has to happen in an environment
 | | |
 |---|---|
 | The ingest pipeline, to the point of creating an event row | **implemented, unit-tested** |
-| `ayonto_EventId` uniqueness, so two concurrent jobs cannot write one event twice | **in the solution source** as an alternate key; **not yet imported anywhere** |
+| `ayonto_EventId` uniqueness, so two concurrent jobs cannot write one event twice | an alternate key in the solution source, **imported successfully as `v1.1.0.3`**; its index status is unread, so not yet known to be Active |
 | Strong-named assembly, which registering a standalone assembly requires | **done**, and the identity is pinned by a test |
 | The assembly in the `AyontoMention` solution | **done from solution 1.2.0.0** — in both the managed and the unmanaged package |
 | The assembly imported into an environment | **not proven** — nothing has imported a package that carries it |
@@ -82,8 +82,13 @@ The narrowness is the point — an ingest that read every fault as idempotency w
 report success for a notification it never recorded.
 
 The key is in the solution source and both checkers require it, so a build cannot
-lose it quietly. It has **not** been imported anywhere: it is newer than the
-`v1.1.0.2` managed import that proved the table itself.
+lose it quietly, and **`v1.1.0.3` managed imported into the development environment
+successfully** — so a package carrying the key is accepted.
+
+**Accepted is not yet Active.** Dataverse builds the supporting index asynchronously, so the key's `EntityKeyIndexStatus` runs Pending → In Progress → **Active**, or Failed — and only Active means the uniqueness is actually enforced. That status has not been read, so nothing
+here may be relied on to have closed the race yet: until it is Active, the handler's
+pre-write lookup is the only thing standing between two concurrent jobs, which is
+exactly the gap the key exists to close.
 
 ### The assembly is strong-named
 
@@ -378,8 +383,9 @@ Code and tests cannot answer any of these:
   query the way the documentation says they do;
 - a real `FormXml` from a real published form carrying the control's parameters in
   the shape the resolver reads;
-- the alternate key surviving a managed import, and the supporting index being
-  created — the key is newer than the `v1.1.0.2` import that proved the table;
+- the alternate key's `EntityKeyIndexStatus` reaching **Active** — the `v1.1.0.3`
+  managed import was accepted, which proves the schema packs and imports, and says
+  nothing about whether the supporting index finished building;
 - a genuine concurrent double save producing `DuplicateRecordEntityKey` and the
   handler converging on one row, which is the only way to confirm that error code
   against a real platform rather than against a fake — and whether such a race can

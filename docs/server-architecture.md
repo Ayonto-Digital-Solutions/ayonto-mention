@@ -28,22 +28,29 @@ recipient's name and address. The new ledger is `ayonto_mentionevent`, the inges
 targets only that, and a test reads the ingest's own sources to keep it that way.
 
 **Which matters when reading a live environment.** Neither half of this product writes
-`ayonto_mention`: the control makes no `createRecord` call against either table, and
-the ingest is not in a package and is registered nowhere. The legacy control does write
-it, directly from the browser. So a fresh `ayonto_mention` row appearing after a save is
-evidence that the legacy writer is still on that form — not evidence that anything here
-ran.
+`ayonto_mention`: the control makes no `createRecord` call against either table, and the
+ingest writes only `ayonto_mentionevent` — with no step registered, it writes nothing at
+all. The legacy control does write that table, directly from the browser.
+
+So a fresh `ayonto_mention` row proves that an active legacy or external writer is still
+present in the environment, and that it is not this product. The legacy control is one
+known direct writer; it is not the only thing that *could* write a table, and an old flow
+or process would look the same from the row alone. Correlate the row's `Created On` and
+`Created By` with the form's actual control configuration before naming the source.
 
 **The table has now been through a real import.** `v1.1.0.2` managed was imported
 into the neutral Ayonto development environment and accepted, which is what proved
 the `OrgOwned` serialization corrected after v1.1.0.1's `0x80044150` rejection. The
 event table is no longer only a file in this repository.
 
-**What that import did not cover is everything added since.** The alternate key on
-`ayonto_EventId` is new in the source and has never been imported anywhere, and the
-plug-in assembly is not in a package at all. A component's presence in a package is
-still not evidence that Dataverse accepts it — the point simply moved rather than
-went away.
+**And `v1.1.0.3` went in after it**, so the alternate key on `ayonto_EventId` has been
+accepted by a real import too. What has *not* been read is that key's
+`EntityKeyIndexStatus`: Dataverse builds the supporting index asynchronously, the status
+runs Pending → In Progress → **Active** or Failed, and only Active means the uniqueness
+is enforced. Accepted is therefore not the same claim as working.
+
+The plug-in assembly is newer still: it ships from `1.2.0.0`, and no environment has
+imported a package that carries it.
 
 The rest is written down so that the implementation, when it happens, is the
 implementation of a decision rather than a rediscovery of one — and so that the
@@ -509,7 +516,7 @@ implemented, and nothing here should be read as saying it is.
 | | Current release | Target |
 |---|---|---|
 | Code component | `Ayonto.AyontoMentionControl` | unchanged |
-| Product table | the legacy-derived table, **UserOwned**, plus `ayonto_mentionevent`, **Organization-owned** — import-proven by the real `v1.1.0.2` managed import; its new alternate key is not | `ayonto_mentionevent` alone, once the legacy table is retired |
+| Product table | the legacy-derived table, **UserOwned**, plus `ayonto_mentionevent`, **Organization-owned** — import-proven by `v1.1.0.2`, and its alternate key by `v1.1.0.3`; the key's index status is unread | `ayonto_mentionevent` alone, once the legacy table is retired |
 | Ingest | the assembly ships from 1.2.0.0; no step is registered and it has never run | async PostOperation step, host-registered |
 | Dispatcher | none | one universal solution-aware flow, in its own central automation solution |
 | Delivery | none | e-mail · Teams · in-app, state per channel |

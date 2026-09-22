@@ -13,6 +13,7 @@ transcription agrees with itself.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -205,6 +206,7 @@ def build_source(
     plugin_registration: str | None = None,
     plugin_folder: str | None = None,
     plugin_root_component: str | None = PLUGIN_FULL_NAME,
+    plugin_root_behavior: str | None = "0",
     commit_plugin_dll: bool = False,
     with_plugin: bool = True,
     extra_relationships: list[tuple[str, str, str]] | None = None,
@@ -274,9 +276,12 @@ def build_source(
         for _, logical in tables
     )
     if plugin_root_component is not None:
+        behavior = (
+            f' behavior="{plugin_root_behavior}"' if plugin_root_behavior is not None else ""
+        )
         components += (
             f'\n        <RootComponent type="91" id="{{{PLUGIN_ASSEMBLY_ID}}}" '
-            f'schemaName="{plugin_root_component}" />'
+            f'schemaName="{plugin_root_component}"{behavior} />'
         )
     (src / "Other" / "Solution.xml").write_text(
         '<?xml version="1.0" encoding="utf-8"?>\n'
@@ -620,6 +625,19 @@ class SourceCheckerTests(unittest.TestCase):
         code, said = run(build_source(self.root, plugin_root_component=None))
         self.assertEqual(code, 1)
         self.assertIn("no type 91 root component", said)
+
+    def test_rejects_a_plug_in_root_component_without_a_behavior(self) -> None:
+        # Include Subcomponents is what carries the plug-in types with the assembly.
+        code, said = run(build_source(self.root, plugin_root_behavior=None))
+        self.assertEqual(code, 1)
+        self.assertIn("behavior", said)
+
+    def test_rejects_a_plug_in_root_component_that_leaves_the_types_behind(self) -> None:
+        for behavior in ("1", "2"):
+            code, said = run(build_source(self.root, plugin_root_behavior=behavior))
+            self.assertEqual(code, 1)
+            self.assertIn("behavior", said)
+            shutil.rmtree(self.root / "src")
 
     def test_rejects_a_root_component_carrying_the_short_assembly_name(self) -> None:
         code, said = run(build_source(self.root, plugin_root_component=PLUGIN_ASSEMBLY))

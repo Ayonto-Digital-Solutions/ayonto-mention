@@ -67,7 +67,7 @@ either table yet.
 | Central `ayonto_mention` table packaged with the solution | ✅ from v1.1.0 — the table is installed by the import |
 | Organization-owned `ayonto_mentionevent` event table, solution and package source | ✅ shipped as solution source in v1.1.0.1 — derived from the real legacy export, see [`powerplatform/README.md`](powerplatform/README.md) |
 | That table accepted by a real Dataverse environment | ✅ `v1.1.0.2` managed was imported into the neutral development environment and accepted. v1.1.0.1 had been **rejected** there with `0x80044150`, *Requested value 'OrganizationOwned' was not found*, because solution XML serializes that ownership model as `OrgOwned`; the corrected serialization is what went through |
-| `ayonto_EventId` alternate key, so one event identifier can only ever name one row | ✅ in the solution source and checked by the build — ⏳ newer than the import above, so not yet import-proven |
+| `ayonto_EventId` alternate key, so one event identifier can only ever name one row | ✅ in the solution source, checked by the build, and **accepted by a real import**: `v1.1.0.3` managed went into the development environment — ⏳ its `EntityKeyIndexStatus` has not been read, so the index is not yet known to be **Active**, and an index that is not Active enforces nothing |
 | Server-side ingest: a saved record becomes `ayonto_mentionevent` rows | ✅ implemented in code and unit-tested in [`server/`](server/README.md) — nothing has run it |
 | That assembly packaged with the solution | ✅ from solution `1.2.0.0` — in the managed **and** the unmanaged package, with its plug-in type, built by CI rather than committed |
 | That package imported into an environment | ⏳ pending — nothing has imported a package carrying the assembly |
@@ -121,7 +121,9 @@ kept per channel; and notification settings configured on the component itself.
 The event table has shipped in the package since v1.1.0.1 and was **imported and
 accepted** by a real environment as part of `v1.1.0.2` managed, once its ownership
 serialization was corrected. From `1.1.0.3` it also carries the alternate key that
-makes one event identifier name one row, and that key is newer than the import.
+makes one event identifier name one row, which `v1.1.0.3` managed then imported
+successfully. What has not been read is the key's index status: Dataverse builds that
+index asynchronously, and only an **Active** one enforces the uniqueness.
 
 From `1.2.0.0` the package also carries the ingest assembly and its plug-in type. Of the
 rest of that list, nothing downstream of the ingest is built.

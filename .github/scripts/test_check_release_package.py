@@ -39,6 +39,8 @@ FULL_NAME = (
 )
 PLUGIN_TYPE = "Ayonto.Mention.Ingest.MentionIngestPlugin"
 TYPE_ID = "61728de5-8d02-493b-8603-4e5cf9c7a10c"
+FRIENDLY_NAME = "9fa5e208-42b6-4708-917f-20ca989c9602"
+QUALIFIED_NAME = f"{PLUGIN_TYPE}, {FULL_NAME}"
 DLL_PATH = f"PluginAssemblies/{ASSEMBLY}-{ASSEMBLY_ID.upper()}/{ASSEMBLY}.dll"
 
 CLIENT_FILES = [
@@ -49,12 +51,18 @@ CLIENT_FILES = [
 ]
 
 
-def solution_xml(*root_components: tuple[str, str, str]) -> bytes:
-    """A manifest declaring the given (type, id, schemaName) root components."""
+def solution_xml(*root_components) -> bytes:
+    """A manifest declaring the given (type, id, schemaName[, behavior]) root components."""
     declared = ""
-    for kind, identifier, schema in root_components:
+    for component in root_components:
+        kind, identifier, schema = component[:3]
+        behavior = component[3] if len(component) > 3 else "0"
         identifier_attribute = f' id="{{{identifier}}}"' if identifier else ""
-        declared += f'<RootComponent type="{kind}"{identifier_attribute} schemaName="{schema}" />'
+        behavior_attribute = f' behavior="{behavior}"' if behavior is not None else ""
+        declared += (
+            f'<RootComponent type="{kind}"{identifier_attribute} '
+            f'schemaName="{schema}"{behavior_attribute} />'
+        )
     return (
         "<ImportExportXml><SolutionManifest><UniqueName>AyontoMention</UniqueName>"
         f"<RootComponents>{declared}</RootComponents>"
@@ -66,12 +74,16 @@ def customizations_xml(
     assemblies: list[tuple[str, str]] | None = None,
     types: list[tuple[str, str]] | None = None,
     steps: list[str] | None = None,
+    qualified_name: str | None = None,
+    friendly_name: str = FRIENDLY_NAME,
 ) -> bytes:
     """`assemblies` are (FullName, PluginAssemblyId); `types` are (Name, PluginTypeId)."""
     declared = ""
     for full_name, identifier in assemblies or []:
         declared_types = "".join(
-            f'<PluginType Name="{name}" PluginTypeId="{type_id}" />'
+            f'<PluginType Name="{name}" PluginTypeId="{type_id}" '
+            f'AssemblyQualifiedName="{qualified_name if qualified_name is not None else f"{name}, {FULL_NAME}"}">'
+            f"<FriendlyName>{friendly_name}</FriendlyName></PluginType>"
             for name, type_id in types or []
         )
         declared_steps = "".join(
@@ -222,6 +234,46 @@ class PluginContract(unittest.TestCase):
         # The full identity is what Dataverse registers the assembly under.
         said = self.refuse(solution=solution_xml(("91", ASSEMBLY_ID, ASSEMBLY)))
         self.assertIn("schemaName", said)
+
+    def test_a_root_component_without_a_behavior_is_refused(self):
+        # Include Subcomponents is what carries the plug-in types along with the
+        # assembly, and it is written out rather than left to a packer default.
+        said = self.refuse(solution=solution_xml((*GOOD_ROOT, None)))
+        self.assertIn("behavior", said)
+
+    def test_a_root_component_that_leaves_the_subcomponents_behind_is_refused(self):
+        for behavior in ("1", "2"):
+            said = self.refuse(solution=solution_xml((*GOOD_ROOT, behavior)))
+            self.assertIn("behavior", said)
+
+    def test_a_changed_plug_in_type_id_is_refused(self):
+        said = self.refuse(
+            customizations=customizations_xml(
+                [(FULL_NAME, ASSEMBLY_ID)],
+                [(PLUGIN_TYPE, "00000000-0000-0000-0000-000000000000")],
+            )
+        )
+        self.assertIn("PluginTypeId", said)
+
+    def test_a_changed_friendly_name_is_refused(self):
+        said = self.refuse(
+            customizations=customizations_xml(
+                [(FULL_NAME, ASSEMBLY_ID)], [(PLUGIN_TYPE, TYPE_ID)], friendly_name="x"
+            )
+        )
+        self.assertIn("FriendlyName", said)
+
+    def test_a_changed_assembly_qualified_name_is_refused(self):
+        # A host step is registered against this type. An identifier that drifted here
+        # is a step that cannot be pointed at anything.
+        said = self.refuse(
+            customizations=customizations_xml(
+                [(FULL_NAME, ASSEMBLY_ID)],
+                [(PLUGIN_TYPE, TYPE_ID)],
+                qualified_name="Ayonto.Mention.Ingest.MentionIngestPlugin, Other",
+            )
+        )
+        self.assertIn("AssemblyQualifiedName", said)
 
     def test_with_the_gate_closed_the_same_package_is_refused(self):
         with self.assertRaises(checker.PackageError) as refused:

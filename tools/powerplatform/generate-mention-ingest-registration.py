@@ -113,9 +113,19 @@ PACKAGED_DLL_PATH = f"/PluginAssemblies/{FOLDER_NAME}/{ASSEMBLY_NAME}.dll"
 #: it lives inside the assembly's registration, under `PluginTypes`. An earlier version
 #: of the package checker expected one, which was wrong and is corrected.
 ROOT_COMPONENT_TYPE = "91"
+
+#: `behavior="0"` is **Include Subcomponents**, and it is written out rather than left
+#: to whatever the packer defaults to. The Microsoft export carries it, and so does the
+#: managed solution released from that source — both were read directly to confirm it.
+#:
+#: The subcomponents of a plug-in assembly are its plug-in types, which is exactly what
+#: this product needs to travel with it: `1` is "do not include subcomponents" and `2`
+#: is "include as shell only", and either would ship an assembly whose handler is not
+#: registered for a host to point a step at.
+ROOT_COMPONENT_BEHAVIOR = "0"
 ROOT_COMPONENT = (
     f'      <RootComponent type="{ROOT_COMPONENT_TYPE}" id="{{{PLUGIN_ASSEMBLY_ID}}}" '
-    f'schemaName="{ASSEMBLY_FULL_NAME}" />'
+    f'schemaName="{ASSEMBLY_FULL_NAME}" behavior="{ROOT_COMPONENT_BEHAVIOR}" />'
 )
 
 DATA_XML = f"""<?xml version="1.0" encoding="utf-8"?>
