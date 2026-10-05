@@ -18,9 +18,10 @@ This file is about the code and about what still has to happen in an environment
 | | |
 |---|---|
 | The ingest pipeline, to the point of creating an event row | **implemented, unit-tested** |
-| `ayonto_EventId` uniqueness, so two concurrent jobs cannot write one event twice | **in the solution source** as an alternate key; **not yet imported anywhere** |
+| `ayonto_EventId` uniqueness, so two concurrent jobs cannot write one event twice | an alternate key in the solution source, **imported successfully as `v1.1.0.3`**; its index status is unread, so not yet known to be Active |
 | Strong-named assembly, which registering a standalone assembly requires | **done**, and the identity is pinned by a test |
-| Packaging the assembly into the `AyontoMention` solution | **blocked by a Microsoft tooling defect** — see below, with the exact error |
+| The assembly in the `AyontoMention` solution | **done from solution 1.2.0.0** — in both the managed and the unmanaged package |
+| The assembly imported into an environment | **not proven** — nothing has imported a package that carries it |
 | Registering the two steps on a host table | **host-owned**, and nothing here can do it |
 | Dispatcher, e-mail, Teams, in-app, per-channel delivery state | **not started** |
 
@@ -81,8 +82,13 @@ The narrowness is the point — an ingest that read every fault as idempotency w
 report success for a notification it never recorded.
 
 The key is in the solution source and both checkers require it, so a build cannot
-lose it quietly. It has **not** been imported anywhere: it is newer than the
-`v1.1.0.2` managed import that proved the table itself.
+lose it quietly, and **`v1.1.0.3` managed imported into the development environment
+successfully** — so a package carrying the key is accepted.
+
+**Accepted is not yet Active.** Dataverse builds the supporting index asynchronously, so the key's `EntityKeyIndexStatus` runs Pending → In Progress → **Active**, or Failed — and only Active means the uniqueness is actually enforced. That status has not been read, so nothing
+here may be relied on to have closed the race yet: until it is Active, the handler's
+pre-write lookup is the only thing standing between two concurrent jobs, which is
+exactly the gap the key exists to close.
 
 ### The assembly is strong-named
 
@@ -171,96 +177,101 @@ dotnet build server/Ayonto.Mention.Ingest/Ayonto.Mention.Ingest.csproj -c Releas
 dotnet test  server/Ayonto.Mention.Ingest.Tests/Ayonto.Mention.Ingest.Tests.csproj  # Windows
 ```
 
-## Packaging: a confirmed tooling defect, twice attempted
+## Packaging: how the assembly reaches the solution
 
-**The assembly is not in the solution package.** The documented mechanism was
-followed to the end, twice, in both of the configurations Microsoft's own tooling
-produces — and it fails at the same place both times. Attempting it a third way is
-not the next useful thing to do.
+**From solution `1.2.0.0` the ingest assembly is part of the base solution**, in both the
+managed and the unmanaged package. It got there through the documented mechanism, and
+what had been missing was one committed file rather than a workaround.
 
-`pac solution add-reference` is the supported way to put a plug-in project into a
-solution project: *"if you want to associate a newly created plug-in with this
-solution … you can use the `pac solution add-reference` command to update the
-`.cdsproj` file to add the new plug-in"*
-([pac solution](https://learn.microsoft.com/power-platform/developer/cli/reference/solution)).
-Running it against this project writes the reference, and the solution build then
-gets two steps further and stops:
+```
+powerplatform/
+├── AyontoMentionSolution.cdsproj        # net48, ProjectReference → ../server/Ayonto.Mention.Ingest
+└── src/
+    ├── Other/Solution.xml               # <RootComponent type="91" id="{…}" schemaName="<full identity>" />
+    └── PluginAssemblies/
+        └── Ayonto.Mention.Ingest-A55A415C-…/
+            └── Ayonto.Mention.Ingest.dll.data.xml   # generated; the binary is NOT here
+```
 
-1. **NuGet refuses the reference across frameworks.**
+`pac solution add-reference` puts the plug-in project into the solution project. The
+solution targets then take the built assembly and look for its **registration
+configuration** in the solution source, matched by assembly full name — and when it is
+absent they say so:
 
-   ```
-   error NU1201: Project Ayonto.Mention.Ingest is not compatible with net462.
-   Project Ayonto.Mention.Ingest supports: net48
-   ```
+```
+error : Unable to find assembly registration configuration for Ayonto.Mention.Ingest.dll
+        in the destination: obj/Release/Metadata/PluginAssemblies
+```
 
-   `AyontoMentionSolution.cdsproj` declares `net462`, which is what
-   `pac solution init` writes. Raising it to `net48` clears this, and was verified
-   to clear it.
+That was read as a tooling defect for two rounds. It is not. The configuration is
+ordinary committed source, and a real Microsoft solution ships exactly the same shape:
+`microsoft/powercat-automation-kit` carries
+`src/PluginAssemblies/AutomationKitAuditFtechAPI-041FE709-…/AutomationKitAuditFtechAPI.dll.data.xml`
+plus a `type="91"` root component, and the released managed solution built from it
+contains the assembly.
 
-2. **SolutionPackager needs a registration configuration that does not exist yet.**
+### The binary is not committed
 
-   ```
-   error : Unable to find assembly registration configuration for
-   .../Ayonto.Mention.Ingest.dll in the destination: obj/Release/Metadata/PluginAssemblies
-   ```
+Only the registration XML is source. The `ProjectReference` supplies the freshly built
+assembly, so the package ships what CI compiled rather than whatever was last checked
+in — and `check-solution-source.py` refuses a committed DLL, while
+`check-release-package.py` requires the built one in the ZIP. Both directions are
+tested.
 
-   The solution targets look for `PluginAssemblies/**/*.dll.data.xml` in the
-   solution source and match it to the assembly by full name. That file is an
-   **export artifact**: it carries the `PluginAssembly` and `PluginType` identifiers
-   a Dataverse environment assigned when the assembly was registered there.
+### Three pinned identifiers, and a generator so they cannot drift
 
-**Both routes were tried, with the versions the current toolchain actually
-resolves.** `pac` 2.12.1's own `pac plugin init` template asks for
-`Microsoft.PowerApps.MSBuild.Plugin` `1.*`, which resolves to 1.52.1, the same
-generation as the solution project's `Microsoft.PowerApps.MSBuild.Solution` `1.*`.
-The second attempt used that template's plug-in **package** configuration —
-`GeneratePackageOnBuild` on, so the build also produces the NuGet package the
-dependent-assemblies capability uses — and the solution build failed with the
-identical error. That is consistent with what the solution targets contain: the
-MSBuild task that processes a project reference looks for `PluginAssemblies` and
-`*dll.data.xml` and has no notion of a plug-in package at all.
+`tools/powerplatform/generate-mention-ingest-registration.py` is the source of truth. It
+writes the registration and keeps exactly one `type="91"` root component in
+`Solution.xml`, and it is idempotent — a second run produces no diff, which CI checks.
 
-So the reference is **not** committed, and the `cdsproj` is unchanged: leaving a
-reference in place that fails the build would break the release workflow, which
-packs the solution on every pull request. Hand-writing the missing XML is the other
-way through, and it is the one this repository refuses — *"Do not hand-author table
-metadata in this tree"*, for the reason that hand-written metadata drifts from the
-schema and breaks import. The `ayonto_mentionevent` table is the one documented
-exception, and it is derived by a committed script from a real export rather than
-typed.
+| | |
+|---|---|
+| `PluginAssemblyId` | `a55a415c-e993-455c-ae92-eb232bb0c23e` |
+| `PluginTypeId` | `61728de5-8d02-493b-8603-4e5cf9c7a10c` |
+| `FriendlyName` | `9fa5e208-42b6-4708-917f-20ca989c9602` |
 
-**What that means for the version number.** The built package carries no server
-component, so this work is not released as a server release. The solution version is
-`1.1.0.3` — a revision on top of the `1.1.0.2` that a real environment imported, and
-the package genuinely does differ from it by the alternate key. It is deliberately
-**not** `1.2.0.0`: a minor version would read as "the server ships now", and it does
-not. Reusing `1.1.0.2` was the other option and is worse — that version is published,
-and two different packages under one version is exactly what this repository's release
-workflow refuses to allow.
+The first two are the Dataverse primary keys of the two components. `FriendlyName` is a
+string rather than a key; the Microsoft export carries a GUID there, so this follows that
+shape for export parity. All three were minted once and are constants: a changed
+`PluginAssemblyId` makes the next import a *different* assembly rather than an update of
+this one, and every registered step in every environment would keep pointing at the one
+that is no longer there. The generator-drift gate is what keeps a hand edit from doing
+that quietly.
 
-### What unblocks it, in order
+### One type 91 root component, and no type 90
 
-1. Register the assembly in the Ayonto DEV environment — the Plug-in Registration
-   tool, or `pac plugin push`.
-2. Add it to the unmanaged `AyontoMention` solution there and export.
-3. Take the exported `PluginAssemblies/…/Ayonto.Mention.Ingest.dll.data.xml` into
-   `powerplatform/src/`, unchanged.
-4. Raise the `cdsproj` to `net48` and add the project reference with
-   `pac solution add-reference --path ../server/Ayonto.Mention.Ingest`.
-5. Flip `PLUGIN_ASSEMBLY_REQUIRED` to `True` in
-   `.github/scripts/check-release-package.py`. The expectation is already written
-   there in full: exactly this assembly, exactly one plug-in type, and no SDK
-   message processing step — a step names a host table, and this solution is
-   reusable.
-6. Then, and only then, the solution version becomes a minor one: the package
-   carries a server component for the first time.
+A plug-in **type** is not a root component. It is declared inside the assembly's
+registration, under `PluginTypes`, which is what the Microsoft source does and what this
+repository's build produces. An earlier version of the package checker expected a
+`type="90"` root component alongside, and the short assembly name in `schemaName`;
+neither would ever have matched a real package, and both are corrected — the checker now
+refuses a stray type 90 from the other side.
 
-Steps 1 to 3 need an environment. Steps 4 to 6 are one commit once they are done.
+### Plug-in packages: supported, but not the route this build takes
 
-The alternative worth watching rather than working around: the defect is in the
-solution project's plug-in handling, so a later
-`Microsoft.PowerApps.MSBuild.Solution` may simply fix it. Re-running step 4 against a
-newer package is a cheap thing to retry; inventing registration XML is not.
+**Plug-in packages are a supported Dataverse concept** — the dependent-assemblies
+capability, a NuGet package in the `PluginPackage` table, registered with
+`pac plugin push`. Nothing here says otherwise, and for an assembly that needs runtime
+dependencies it is the route Microsoft points at.
+
+What it is **not** is a solution-source path that this build can use. The MSBuild task
+that processes a `cdsproj` project reference knows `PluginAssemblies` and
+`*dll.data.xml` and has no notion of a plug-in package. The
+`src/pluginpackages/*/pluginpackage.xml` files in the PowerCAT repository looked like a
+GUID-free source-only alternative and turned out not to be usable as one for our build:
+no `.nupkg` is committed beside them, no root component mentions them, and the released
+managed solution built from that tree contains no `.nupkg` at all. So the assembly here
+travels the assembly route, which needs no runtime dependencies anyway.
+
+### Assembly version numbers are a registration contract
+
+Worth knowing before anybody raises `AssemblyVersion` from `1.0.0.0`. Microsoft:
+changing **build or revision** is "an in-place upgrade … Any pre-existing steps from
+the older solution are automatically changed to refer to the newer version"; changing
+**major or minor** makes it "a different assembly than the previous version", and
+"Plug-in registration steps in the existing solution will continue to refer to the
+previous version" until somebody re-points them by hand. So the fixed `1.0.0.0` here is
+a decision, and the safe way to ship a code change later is the third or fourth part.
 
 ## The registration a host has to make
 
@@ -268,6 +279,22 @@ Two steps per mention-enabled source table, registered against the plug-in type
 this solution supplies. The steps belong to the **host** solution: a step names the
 host's own table, and this base solution is reusable and must never contain a
 customer's table name.
+
+**That is a product boundary, not a packaging gap, and it was checked rather than
+assumed.** The four ways out of it are all closed:
+
+| | |
+|---|---|
+| A base-solution step with no primary entity, to stay host-neutral? | **No.** "If a primary entity isn't specified for core messages like `Update`, `Delete`, `Retrieve`, and `RetrieveMultiple`, or any message that can be applied, the plug-in will be invoked for all entities that support that message" — an asynchronous step like this one would queue a system job for every record write in the environment |
+| Filtering attributes to narrow that down? | **No.** They apply "when you set the primary entity", so a global step forfeits the one mechanism that would make it affordable |
+| A base solution carrying a step for a table it does not know yet? | **No.** A step *is* the message-and-table registration, and it is "a solution component" that travels in the solution that declares it |
+| The assembly and the steps in different solutions? | **Yes**, and that is the design: a solution may contain a step while "another solution containing the assembly is already installed" |
+
+So host onboarding requires **one `Create` and one `Update` step per mention-enabled
+host table**. Shipping a global step to avoid that would trade one declaration per host
+table for an asynchronous job on every write in the tenant, which is not a trade this
+product will make.
+https://learn.microsoft.com/power-apps/developer/data-platform/register-plug-in
 
 Plug-in type: `Ayonto.Mention.Ingest.MentionIngestPlugin`
 
@@ -338,8 +365,11 @@ a registration mistake, so the system job fails visibly; registered synchronousl
 
 Code and tests cannot answer any of these:
 
-- the assembly registering, and the two steps registering against a plug-in type
-  supplied by a different installed solution;
+- the solution importing **with** the assembly in it, and Dataverse accepting the
+  pinned `PluginAssemblyId` and `PluginTypeId` from a package rather than minting its
+  own;
+- the two steps registering against a plug-in type supplied by a different installed
+  solution;
 - the images arriving with the expected columns, under the expected aliases, on
   both messages;
 - whether a text-only edit through this control puts the unchanged companion column
@@ -353,8 +383,9 @@ Code and tests cannot answer any of these:
   query the way the documentation says they do;
 - a real `FormXml` from a real published form carrying the control's parameters in
   the shape the resolver reads;
-- the alternate key surviving a managed import, and the supporting index being
-  created — the key is newer than the `v1.1.0.2` import that proved the table;
+- the alternate key's `EntityKeyIndexStatus` reaching **Active** — the `v1.1.0.3`
+  managed import was accepted, which proves the schema packs and imports, and says
+  nothing about whether the supporting index finished building;
 - a genuine concurrent double save producing `DuplicateRecordEntityKey` and the
   handler converging on one row, which is the only way to confirm that error code
   against a real platform rather than against a fake — and whether such a race can

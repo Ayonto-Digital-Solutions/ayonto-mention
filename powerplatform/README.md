@@ -101,7 +101,7 @@ A hand-written `RibbonDiff.xml` is a fourth: the packer answers it with a
 | Code component                | `Ayonto.AyontoMentionControl` |
 | Table (current)               | `ayonto_mention`, **UserOwned**, from v1.1.0 |
 | Table (product)               | `ayonto_mentionevent`, **Organization-owned**, derived from the legacy export — **imported and accepted** by the real environment as part of `v1.1.0.2` managed |
-| Alternate key                 | `ayonto_mentionevent_ak_eventid` on `ayonto_EventId` — the uniqueness the ingest's idempotency rests on, **newer than that import and not yet import-proven** |
+| Alternate key                 | `ayonto_mentionevent_ak_eventid` on `ayonto_EventId` — the uniqueness the ingest's idempotency rests on; **`v1.1.0.3` managed imported successfully**, and the key's `EntityKeyIndexStatus` has not been read, so the index is not yet known to be Active |
 | Ownership, as solution XML spells it | `<OwnershipTypeMask>OrgOwned</OwnershipTypeMask>` — the serialization of the `OrganizationOwned` model; v1.1.0.1 wrote the model's name instead and the real import rejected the table with `0x80044150` ([why](../docs/server-architecture.md#the-product-event-table)) |
 
 **The choice value prefix is taken from the publisher that already exists.**
@@ -259,18 +259,30 @@ changed to avoid taking that test.
 
 ## What this solution does not carry
 
-No flows, no plug-in assemblies, no SDK message processing steps, no connection
-references, no environment variables, no security roles. The import asks for no
-connection, because nothing in it needs one.
+No flows, no SDK message processing steps, no connection references, no environment
+variables, no security roles. The import asks for no connection, because nothing in it
+needs one.
 
-**The missing plug-in assembly is a packaging gate rather than missing code.** The
-server-side ingest is implemented and unit-tested in [`../server`](../server/README.md),
-and this solution is where its assembly belongs. It is not here because
-SolutionPackager will not pack an assembly without the registration configuration
-that names it, and that configuration is an export artifact from an environment where
-the assembly has been registered. The exact error, and the ordered list of what
-unblocks it, are in [`../server/README.md`](../server/README.md). Hand-writing that
-XML is the other way through, and it is the one the rule above refuses.
+**It does carry the plug-in assembly from 1.2.0.0**, built from
+[`../server`](../server/README.md) through the solution project's reference, with its
+registration generated into `src/PluginAssemblies/` by
+`tools/powerplatform/generate-mention-ingest-registration.py`. The binary is not
+committed. What it still does not carry is a **step**: a step names the host table it is
+registered against, so it belongs to the host application's solution — one `Create` and
+one `Update` per mention-enabled table. This solution therefore installs a handler that
+nothing calls yet.
+
+**How the assembly gets here.** SolutionPackager will not pack one without the
+registration configuration that names it — a
+`PluginAssemblies/<Name>-<id>/<Name>.dll.data.xml` in this tree, alongside a `type="91"`
+root component whose `schemaName` is the full assembly identity. That configuration is
+ordinary committed source, not an environment artifact, and a real Microsoft solution
+ships exactly that shape.
+
+It is generated rather than typed, and the three identifiers in it are pinned: a changed
+`PluginAssemblyId` makes the next import a different component rather than an update of
+this one. The generator-drift gate in CI is what keeps a hand edit from doing that
+quietly. See [`../server/README.md`](../server/README.md).
 
 So: this package installs the table the ingest writes to, and carries nothing that
 writes to it. The dispatcher and every delivery channel in

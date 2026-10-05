@@ -8,7 +8,7 @@
       <LocalizedName description="Ayonto Mention" languagecode="1033" />
     </LocalizedNames>
     <Descriptions />
-    <Version>1.1.0.3</Version>
+    <Version>1.2.0.0</Version>
     <!-- Solution Package Type: Unmanaged(0)/Managed(1)/Both(2)-->
     <Managed>2</Managed>
     <Publisher>
@@ -94,6 +94,7 @@
            schema-cased name. Both spellings have to refer to the same table. -->
       <RootComponent type="1" schemaName="ayonto_mention" behavior="0" />
       <RootComponent type="1" schemaName="ayonto_mentionevent" behavior="0" />
+      <RootComponent type="91" id="{a55a415c-e993-455c-ae92-eb232bb0c23e}" schemaName="Ayonto.Mention.Ingest, Version=1.0.0.0, Culture=neutral, PublicKeyToken=0e66244ba4f12435" behavior="0" />
     </RootComponents>
     <MissingDependencies />
   </SolutionManifest>

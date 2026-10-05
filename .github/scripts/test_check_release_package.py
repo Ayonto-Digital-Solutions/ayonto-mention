@@ -32,9 +32,16 @@ def load_checker():
 checker = load_checker()
 
 ASSEMBLY = "Ayonto.Mention.Ingest"
+ASSEMBLY_ID = "a55a415c-e993-455c-ae92-eb232bb0c23e"
+FULL_NAME = (
+    "Ayonto.Mention.Ingest, Version=1.0.0.0, Culture=neutral, "
+    "PublicKeyToken=0e66244ba4f12435"
+)
 PLUGIN_TYPE = "Ayonto.Mention.Ingest.MentionIngestPlugin"
-ASSEMBLY_PATH = f"PluginAssemblies/{ASSEMBLY}-A1B2C3D4/{ASSEMBLY}.dll"
-DATA_PATH = f"PluginAssemblies/{ASSEMBLY}-A1B2C3D4/{ASSEMBLY}.dll.data.xml"
+TYPE_ID = "61728de5-8d02-493b-8603-4e5cf9c7a10c"
+FRIENDLY_NAME = "9fa5e208-42b6-4708-917f-20ca989c9602"
+QUALIFIED_NAME = f"{PLUGIN_TYPE}, {FULL_NAME}"
+DLL_PATH = f"PluginAssemblies/{ASSEMBLY}-{ASSEMBLY_ID.upper()}/{ASSEMBLY}.dll"
 
 CLIENT_FILES = [
     "[Content_Types].xml",
@@ -44,11 +51,18 @@ CLIENT_FILES = [
 ]
 
 
-def solution_xml(*root_components: tuple[str, str]) -> bytes:
-    declared = "".join(
-        f'<RootComponent type="{kind}" schemaName="{name}" behavior="0" />'
-        for kind, name in root_components
-    )
+def solution_xml(*root_components) -> bytes:
+    """A manifest declaring the given (type, id, schemaName[, behavior]) root components."""
+    declared = ""
+    for component in root_components:
+        kind, identifier, schema = component[:3]
+        behavior = component[3] if len(component) > 3 else "0"
+        identifier_attribute = f' id="{{{identifier}}}"' if identifier else ""
+        behavior_attribute = f' behavior="{behavior}"' if behavior is not None else ""
+        declared += (
+            f'<RootComponent type="{kind}"{identifier_attribute} '
+            f'schemaName="{schema}"{behavior_attribute} />'
+        )
     return (
         "<ImportExportXml><SolutionManifest><UniqueName>AyontoMention</UniqueName>"
         f"<RootComponents>{declared}</RootComponents>"
@@ -57,21 +71,27 @@ def solution_xml(*root_components: tuple[str, str]) -> bytes:
 
 
 def customizations_xml(
-    assemblies: list[str] | None = None,
-    types: list[str] | None = None,
+    assemblies: list[tuple[str, str]] | None = None,
+    types: list[tuple[str, str]] | None = None,
     steps: list[str] | None = None,
+    qualified_name: str | None = None,
+    friendly_name: str = FRIENDLY_NAME,
 ) -> bytes:
+    """`assemblies` are (FullName, PluginAssemblyId); `types` are (Name, PluginTypeId)."""
     declared = ""
-    for assembly in assemblies or []:
+    for full_name, identifier in assemblies or []:
         declared_types = "".join(
-            f"<PluginType><TypeName>{name}</TypeName></PluginType>" for name in types or []
+            f'<PluginType Name="{name}" PluginTypeId="{type_id}" '
+            f'AssemblyQualifiedName="{qualified_name if qualified_name is not None else f"{name}, {FULL_NAME}"}">'
+            f"<FriendlyName>{friendly_name}</FriendlyName></PluginType>"
+            for name, type_id in types or []
         )
         declared_steps = "".join(
             f"<SdkMessageProcessingStep><Name>{name}</Name></SdkMessageProcessingStep>"
             for name in steps or []
         )
         declared += (
-            f"<PluginAssembly><Name>{assembly}</Name>"
+            f'<PluginAssembly FullName="{full_name}" PluginAssemblyId="{identifier}">'
             f"<PluginTypes>{declared_types}</PluginTypes>"
             f"<SdkMessageProcessingSteps>{declared_steps}</SdkMessageProcessingSteps>"
             "</PluginAssembly>"
@@ -83,124 +103,193 @@ def customizations_xml(
     ).encode("utf-8")
 
 
-#: The plug-in root components a package carrying the ingest would declare.
-PLUGIN_ROOTS = (("91", ASSEMBLY), ("90", PLUGIN_TYPE))
+#: The plug-in exactly as the built package carries it.
+GOOD_ROOT = ("91", ASSEMBLY_ID, FULL_NAME)
+GOOD_FILES = CLIENT_FILES + [DLL_PATH]
 
 
-class GateClosed(unittest.TestCase):
-    """What the released package is today: the component, the tables, no assembly."""
+def good_customizations() -> bytes:
+    return customizations_xml([(FULL_NAME, ASSEMBLY_ID)], [(PLUGIN_TYPE, TYPE_ID)])
 
-    def test_a_package_without_plug_in_content_is_accepted(self):
-        paths, components = checker.check_plugin(
-            CLIENT_FILES, solution_xml(("1", "ayonto_mentionevent")), customizations_xml(),
-            required=False,
+
+class PluginContract(unittest.TestCase):
+    """The contract the real built package satisfies, and the ways of missing it.
+
+    The shape here is the one a real Microsoft solution ships and this repository's own
+    build produces: **one type 91 root component whose schemaName is the full assembly
+    identity**, and the plug-in type declared inside the assembly's registration. An
+    earlier version of the checker expected a type 90 root component alongside, and a
+    short assembly name in schemaName. Neither would ever have matched a package, so
+    both are asserted the right way round here.
+    """
+
+    def accept(self, names=None, solution=None, customizations=None):
+        return checker.check_plugin(
+            names if names is not None else GOOD_FILES,
+            solution if solution is not None else solution_xml(GOOD_ROOT),
+            customizations if customizations is not None else good_customizations(),
+            required=True,
         )
 
-        self.assertEqual(frozenset(), paths)
-        self.assertEqual(frozenset(), components)
+    def refuse(self, **kwargs):
+        with self.assertRaises(checker.PackageError) as refused:
+            self.accept(**kwargs)
+        return str(refused.exception)
 
-    def test_an_assembly_file_is_refused_and_the_refusal_names_the_gate(self):
+    def test_the_package_this_repository_builds_is_accepted(self):
+        paths, components = self.accept()
+
+        self.assertEqual({DLL_PATH}, set(paths))
+        self.assertEqual({("91", FULL_NAME)}, set(components))
+
+    def test_the_gate_is_open_in_the_committed_checker(self):
+        # The flag is the statement: from solution 1.2.0.0 the package carries the ingest.
+        self.assertTrue(checker.PLUGIN_ASSEMBLY_REQUIRED)
+
+    def test_a_missing_assembly_file_is_refused(self):
+        self.assertIn("carries no", self.refuse(names=CLIENT_FILES))
+
+    def test_an_assembly_under_another_identifier_is_refused(self):
+        wrong = f"PluginAssemblies/{ASSEMBLY}-00000000-0000-0000-0000-000000000000/{ASSEMBLY}.dll"
+        self.assertIn("carries no", self.refuse(names=CLIENT_FILES + [wrong]))
+
+    def test_somebody_else_s_assembly_alongside_ours_is_refused(self):
+        self.assertIn(
+            "Other.dll",
+            self.refuse(names=GOOD_FILES + ["PluginAssemblies/Other-1/Other.dll"]),
+        )
+
+    def test_a_wrong_full_name_is_refused(self):
+        said = self.refuse(
+            customizations=customizations_xml(
+                [("Ayonto.Mention.Ingest", ASSEMBLY_ID)], [(PLUGIN_TYPE, TYPE_ID)]
+            )
+        )
+        self.assertIn("FullName", said)
+
+    def test_a_wrong_assembly_id_is_refused(self):
+        said = self.refuse(
+            customizations=customizations_xml(
+                [(FULL_NAME, "00000000-0000-0000-0000-000000000000")],
+                [(PLUGIN_TYPE, TYPE_ID)],
+            )
+        )
+        self.assertIn("PluginAssemblyId", said)
+
+    def test_a_missing_plug_in_type_is_refused(self):
+        self.assertIn(
+            "plug-in types",
+            self.refuse(customizations=customizations_xml([(FULL_NAME, ASSEMBLY_ID)], [])),
+        )
+
+    def test_a_plug_in_type_nobody_named_is_refused(self):
+        said = self.refuse(
+            customizations=customizations_xml(
+                [(FULL_NAME, ASSEMBLY_ID)],
+                [(PLUGIN_TYPE, TYPE_ID), ("Ayonto.Mention.Ingest.Something", TYPE_ID)],
+            )
+        )
+        self.assertIn("plug-in types", said)
+
+    def test_a_second_assembly_declaration_is_refused(self):
+        said = self.refuse(
+            customizations=customizations_xml(
+                [(FULL_NAME, ASSEMBLY_ID), ("Other, Version=1.0.0.0", ASSEMBLY_ID)],
+                [(PLUGIN_TYPE, TYPE_ID)],
+            )
+        )
+        self.assertIn("plug-in assemblies", said)
+
+    def test_a_step_belongs_to_the_host_solution_and_is_refused_here(self):
+        # A step names the host table it is registered against. A reusable base solution
+        # carrying a customer's table name is the one thing this package must never do.
+        said = self.refuse(
+            customizations=customizations_xml(
+                [(FULL_NAME, ASSEMBLY_ID)],
+                [(PLUGIN_TYPE, TYPE_ID)],
+                ["ingest on a host table"],
+            )
+        )
+        self.assertIn("host solution", said)
+
+    def test_a_missing_root_component_is_refused(self):
+        # An assembly no RootComponent mentions packs without being part of the solution.
+        self.assertIn("0 plug-in root components", self.refuse(solution=solution_xml()))
+
+    def test_a_type_90_root_component_is_refused(self):
+        # The mistake this file used to make from the other side: a plug-in type is not a
+        # root component.
+        said = self.refuse(
+            solution=solution_xml(GOOD_ROOT, ("90", TYPE_ID, PLUGIN_TYPE))
+        )
+        self.assertIn("type 91", said)
+
+    def test_a_root_component_naming_another_id_is_refused(self):
+        said = self.refuse(
+            solution=solution_xml(("91", "00000000-0000-0000-0000-000000000000", FULL_NAME))
+        )
+        self.assertIn("pinned", said)
+
+    def test_a_root_component_with_the_short_name_is_refused(self):
+        # The full identity is what Dataverse registers the assembly under.
+        said = self.refuse(solution=solution_xml(("91", ASSEMBLY_ID, ASSEMBLY)))
+        self.assertIn("schemaName", said)
+
+    def test_a_root_component_without_a_behavior_is_refused(self):
+        # Include Subcomponents is what carries the plug-in types along with the
+        # assembly, and it is written out rather than left to a packer default.
+        said = self.refuse(solution=solution_xml((*GOOD_ROOT, None)))
+        self.assertIn("behavior", said)
+
+    def test_a_root_component_that_leaves_the_subcomponents_behind_is_refused(self):
+        for behavior in ("1", "2"):
+            said = self.refuse(solution=solution_xml((*GOOD_ROOT, behavior)))
+            self.assertIn("behavior", said)
+
+    def test_a_changed_plug_in_type_id_is_refused(self):
+        said = self.refuse(
+            customizations=customizations_xml(
+                [(FULL_NAME, ASSEMBLY_ID)],
+                [(PLUGIN_TYPE, "00000000-0000-0000-0000-000000000000")],
+            )
+        )
+        self.assertIn("PluginTypeId", said)
+
+    def test_a_changed_friendly_name_is_refused(self):
+        said = self.refuse(
+            customizations=customizations_xml(
+                [(FULL_NAME, ASSEMBLY_ID)], [(PLUGIN_TYPE, TYPE_ID)], friendly_name="x"
+            )
+        )
+        self.assertIn("FriendlyName", said)
+
+    def test_a_changed_assembly_qualified_name_is_refused(self):
+        # A host step is registered against this type. An identifier that drifted here
+        # is a step that cannot be pointed at anything.
+        said = self.refuse(
+            customizations=customizations_xml(
+                [(FULL_NAME, ASSEMBLY_ID)],
+                [(PLUGIN_TYPE, TYPE_ID)],
+                qualified_name="Ayonto.Mention.Ingest.MentionIngestPlugin, Other",
+            )
+        )
+        self.assertIn("AssemblyQualifiedName", said)
+
+    def test_with_the_gate_closed_the_same_package_is_refused(self):
         with self.assertRaises(checker.PackageError) as refused:
             checker.check_plugin(
-                CLIENT_FILES + [ASSEMBLY_PATH, DATA_PATH],
-                solution_xml(),
-                customizations_xml(),
-                required=False,
+                GOOD_FILES, solution_xml(GOOD_ROOT), good_customizations(), required=False
             )
 
         self.assertIn("PLUGIN_ASSEMBLY_REQUIRED", str(refused.exception))
 
-    def test_a_declared_assembly_is_refused_even_with_no_file(self):
-        with self.assertRaises(checker.PackageError):
-            checker.check_plugin(
-                CLIENT_FILES, solution_xml(), customizations_xml([ASSEMBLY]), required=False
-            )
-
-    def test_a_plug_in_root_component_is_refused_even_with_no_file(self):
-        with self.assertRaises(checker.PackageError):
-            checker.check_plugin(
-                CLIENT_FILES, solution_xml(*PLUGIN_ROOTS), customizations_xml(), required=False
-            )
-
-    def test_the_gate_is_closed_in_the_committed_checker(self):
-        # The flag is the whole statement, so the test says it out loud: this
-        # release does not package the ingest, and flipping it is a deliberate
-        # change that arrives with the registration configuration.
-        self.assertFalse(checker.PLUGIN_ASSEMBLY_REQUIRED)
-
-
-class GateOpen(unittest.TestCase):
-    """What the checker will insist on once an assembly may legitimately be packed."""
-
-    def accept(self, names, solution, customizations):
-        return checker.check_plugin(names, solution, customizations, required=True)
-
-    def test_this_product_s_assembly_and_type_are_accepted_and_accounted_for(self):
-        paths, components = self.accept(
-            CLIENT_FILES + [ASSEMBLY_PATH, DATA_PATH],
-            solution_xml(("1", "ayonto_mentionevent"), *PLUGIN_ROOTS),
-            customizations_xml([ASSEMBLY], [PLUGIN_TYPE]),
+    def test_with_the_gate_closed_a_client_only_package_is_accepted(self):
+        paths, components = checker.check_plugin(
+            CLIENT_FILES, solution_xml(), customizations_xml(), required=False
         )
 
-        self.assertEqual({ASSEMBLY_PATH, DATA_PATH}, set(paths))
-        self.assertEqual({("91", ASSEMBLY), ("90", PLUGIN_TYPE)}, set(components))
-
-    def test_a_missing_assembly_is_refused(self):
-        with self.assertRaises(checker.PackageError) as refused:
-            self.accept(CLIENT_FILES, solution_xml(*PLUGIN_ROOTS), customizations_xml([ASSEMBLY]))
-
-        self.assertIn("no plug-in assembly", str(refused.exception))
-
-    def test_somebody_else_s_assembly_is_refused(self):
-        with self.assertRaises(checker.PackageError) as refused:
-            self.accept(
-                CLIENT_FILES + [ASSEMBLY_PATH, "PluginAssemblies/Other-1/Other.dll"],
-                solution_xml(*PLUGIN_ROOTS),
-                customizations_xml([ASSEMBLY], [PLUGIN_TYPE]),
-            )
-
-        self.assertIn("Other.dll", str(refused.exception))
-
-    def test_an_assembly_nobody_declared_is_refused(self):
-        with self.assertRaises(checker.PackageError):
-            self.accept(
-                CLIENT_FILES + [ASSEMBLY_PATH],
-                solution_xml(*PLUGIN_ROOTS),
-                customizations_xml(),
-            )
-
-    def test_a_plug_in_type_nobody_named_is_refused(self):
-        with self.assertRaises(checker.PackageError) as refused:
-            self.accept(
-                CLIENT_FILES + [ASSEMBLY_PATH],
-                solution_xml(*PLUGIN_ROOTS),
-                customizations_xml([ASSEMBLY], [PLUGIN_TYPE, "Ayonto.Mention.Ingest.Something"]),
-            )
-
-        self.assertIn("plug-in types", str(refused.exception))
-
-    def test_a_step_belongs_to_the_host_solution_and_is_refused_here(self):
-        # A step names the host table it is registered against. A reusable base
-        # solution carrying a customer's table name is the one thing this package
-        # must never do.
-        with self.assertRaises(checker.PackageError) as refused:
-            self.accept(
-                CLIENT_FILES + [ASSEMBLY_PATH],
-                solution_xml(*PLUGIN_ROOTS),
-                customizations_xml([ASSEMBLY], [PLUGIN_TYPE], ["ingest on a host table"]),
-            )
-
-        self.assertIn("host solution", str(refused.exception))
-
-    def test_an_undeclared_root_component_is_refused(self):
-        with self.assertRaises(checker.PackageError) as refused:
-            self.accept(
-                CLIENT_FILES + [ASSEMBLY_PATH],
-                solution_xml(("91", ASSEMBLY)),
-                customizations_xml([ASSEMBLY], [PLUGIN_TYPE]),
-            )
-
-        self.assertIn("root components are wrong", str(refused.exception))
+        self.assertEqual(frozenset(), paths)
+        self.assertEqual(frozenset(), components)
 
 
 if __name__ == "__main__":

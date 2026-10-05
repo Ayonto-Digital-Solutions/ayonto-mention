@@ -7,13 +7,15 @@ v1.1.0 the solution package installs the central `ayonto_mention` table, and the
 1.1.0.1 candidate adds the product's own `ayonto_mentionevent` alongside it: both
 schemas are in the package.
 
-**The ingest described below is now implemented in code.** It lives in
-[`server/`](../server/README.md) as a net48 plug-in assembly with unit tests, and it
-creates `ayonto_mentionevent` rows and nothing else. What it has not done is run:
-the assembly is not in the solution package yet, no step is registered anywhere, and
-no event row has ever been created in a Dataverse environment. The reason the
-assembly is not packaged is a prerequisite only an environment can produce, and it is
-written down in [`server/README.md`](../server/README.md) rather than glossed here.
+**The ingest described below is implemented and, from solution `1.2.0.0`, shipped.**
+It lives in [`server/`](../server/README.md) as a net48 plug-in assembly with unit
+tests, it creates `ayonto_mentionevent` rows and nothing else, and both the managed and
+the unmanaged package now carry it along with its plug-in type.
+
+What it has still not done is **run**. The base solution carries the assembly; it
+carries no step, because a step names a host table and therefore belongs to the host
+application's own solution. So importing this package registers a handler that nothing
+calls yet, and no event row has ever been created in a Dataverse environment.
 
 The dispatcher and every delivery channel described below are still designed and
 unbuilt, so a mention still becomes a bound output on a business record and stops
@@ -25,16 +27,30 @@ while; the second is the legacy product's, it is user-owned, and its columns car
 recipient's name and address. The new ledger is `ayonto_mentionevent`, the ingest
 targets only that, and a test reads the ingest's own sources to keep it that way.
 
+**Which matters when reading a live environment.** Neither half of this product writes
+`ayonto_mention`: the control makes no `createRecord` call against either table, and the
+ingest writes only `ayonto_mentionevent` — with no step registered, it writes nothing at
+all. The legacy control does write that table, directly from the browser.
+
+So a fresh `ayonto_mention` row proves that an active legacy or external writer is still
+present in the environment, and that it is not this product. The legacy control is one
+known direct writer; it is not the only thing that *could* write a table, and an old flow
+or process would look the same from the row alone. Correlate the row's `Created On` and
+`Created By` with the form's actual control configuration before naming the source.
+
 **The table has now been through a real import.** `v1.1.0.2` managed was imported
 into the neutral Ayonto development environment and accepted, which is what proved
 the `OrgOwned` serialization corrected after v1.1.0.1's `0x80044150` rejection. The
 event table is no longer only a file in this repository.
 
-**What that import did not cover is everything added since.** The alternate key on
-`ayonto_EventId` is new in the source and has never been imported anywhere, and the
-plug-in assembly is not in a package at all. A component's presence in a package is
-still not evidence that Dataverse accepts it — the point simply moved rather than
-went away.
+**And `v1.1.0.3` went in after it**, so the alternate key on `ayonto_EventId` has been
+accepted by a real import too. What has *not* been read is that key's
+`EntityKeyIndexStatus`: Dataverse builds the supporting index asynchronously, the status
+runs Pending → In Progress → **Active** or Failed, and only Active means the uniqueness
+is enforced. Accepted is therefore not the same claim as working.
+
+The plug-in assembly is newer still: it ships from `1.2.0.0`, and no environment has
+imported a package that carries it.
 
 The rest is written down so that the implementation, when it happens, is the
 implementation of a decision rather than a rediscovery of one — and so that the
@@ -103,12 +119,12 @@ and reusing another product's table is not the target.
 
 ### Two version numbers, and they are not the same number
 
-The target Dataverse solution and release version is **`1.1.0.3`** — a revision on
-top of the `1.1.0.2` a real environment imported, because what the package gained
-since is the ledger's alternate key and nothing else. It is deliberately not a minor
-version: the server-side ingest exists in this repository but not in the package, so
-a number that read as "the server ships now" would be a claim rather than a version.
-See [`server/README.md`](../server/README.md).
+The target Dataverse solution and release version is **`1.2.0.0`**. A minor step, and
+this time the number means what it says: the package carries a server component for the
+first time. `1.1.0.3` was the revision before it, which added the ledger's alternate key
+and deliberately stopped short of a minor version while the ingest was still only in the
+repository. What `1.2.0.0` does **not** claim is a registered step or a delivered
+notification — see [`server/README.md`](../server/README.md).
 
 That is an ordinary solution version, not an unusual one. *"A solution's version
 has the following format: major.minor.build.revision"*, and the article's own
@@ -438,6 +454,37 @@ reports only the first channel is worse than none, because it reads as success.
 
 The delivery table itself is later work and is not designed here.
 
+### The event table is not the companion column's replacement
+
+Worth stating plainly, because the two are easy to read as one thing and a release
+that adds the second can look like it should have removed the first.
+
+| | `mentionMetadata` on the source record | `ayonto_mentionevent` |
+|---|---|---|
+| When | **inside** the record's own save | **after** the record is committed |
+| Written by | the control, as a bound output | the server ingest, as SYSTEM |
+| What it is for | carrying `eventId`, `recipientUserId` and the occurrence positions across the save, and reading a saved record back as people | the product's record that a notification is owed, with its configuration snapshot |
+| Who may write it | anybody who may write the source text | the trusted ingest only |
+
+They are not alternatives. The companion column is the **identity bridge**: without it,
+nothing survives the save that says *which* Robin Fox was meant, and reopening the
+record cannot draw the mentions it contains. The event table is the **post-save
+ledger**: it cannot exist before the save, which is the whole reason the commit
+boundary holds.
+
+So the maker-facing "Mention metadata Column" does not disappear because the event
+table arrived. Making the property `required="false"` would hide the requirement in the
+form designer and lose `eventId` and `recipientUserId` the moment somebody saved
+without a column bound — a worse product with a tidier configuration screen. The
+framework's own position is that a bound property expects a column, and that an
+imported component may make a property optional in a later version but not remove one.
+
+**What would actually retire it** is a supported mechanism that keeps all four
+properties — recipient identity, `eventId`, readback identity, and the save as the
+commit boundary — without a hand-configured column. That mechanism is not chosen yet.
+Custom events exist in the framework but are documented as preview, and this product
+does not build its identity bridge on a preview surface.
+
 ### The companion metadata transition
 
 The record Save stays the commit boundary. The control must **not** create a
@@ -469,8 +516,8 @@ implemented, and nothing here should be read as saying it is.
 | | Current release | Target |
 |---|---|---|
 | Code component | `Ayonto.AyontoMentionControl` | unchanged |
-| Product table | the legacy-derived table, **UserOwned**, plus `ayonto_mentionevent`, **Organization-owned** — import-proven by the real `v1.1.0.2` managed import; its new alternate key is not | `ayonto_mentionevent` alone, once the legacy table is retired |
-| Ingest | implemented in code under `server/`, not packaged, not registered, never run | async PostOperation step, host-registered |
+| Product table | the legacy-derived table, **UserOwned**, plus `ayonto_mentionevent`, **Organization-owned** — import-proven by `v1.1.0.2`, and its alternate key by `v1.1.0.3`; the key's index status is unread | `ayonto_mentionevent` alone, once the legacy table is retired |
+| Ingest | the assembly ships from 1.2.0.0; no step is registered and it has never run | async PostOperation step, host-registered |
 | Dispatcher | none | one universal solution-aware flow, in its own central automation solution |
 | Delivery | none | e-mail · Teams · in-app, state per channel |
 | Maker notification config | the twelve manifest settings exist; the server-side resolution is implemented in code | set on the component, resolved server-side from published `FormXml` per `recordTable + sourceField` |
@@ -489,7 +536,7 @@ flowchart TD
     pcf --> meta["bound output: companion metadata"]
     text --> save["Source-record save"]
     meta --> save
-    save -.-> step["async PostOperation step<br/>on the host source table<br/>(implemented, not registered)"]
+    save -.-> step["async PostOperation step<br/>on the host source table<br/>(assembly shipped, step host-owned)"]
     step -.-> ledger["ayonto_mentionevent<br/>(imported and accepted as of v1.1.0.2;<br/>its alternate key is newer)"]
     ledger -.-> dispatcher["planned: dispatcher"]
     dispatcher -.-> channels["planned: e-mail · Teams · in-app"]
@@ -499,10 +546,11 @@ Solid arrows exist today. Dotted ones do not — including the two around the st
 whose code exists while nothing registers or calls it. The ledger box is a table the
 package carries; the dispatcher and the channels are not written at all.
 
-**Packaged is not imported, and implemented is not registered.** A table in a
-solution says nothing about anything writing to it. Code that creates event rows
-says nothing about a step existing anywhere that would call it. This document should
-not be read as if either had happened.
+**Packaged is not imported, and shipped is not registered.** A table in a solution says
+nothing about anything writing to it, and an assembly in a solution says nothing about a
+step existing anywhere that would call it. Both halves of that are true of this package:
+it carries the ingest and registers nothing. This document should not be read as if
+either had happened.
 
 ## Two solutions, and why
 
@@ -519,9 +567,8 @@ Owns everything that is the same for every host:
   reused unchanged from that product's export and shipped since v1.1.0;
   **targeted** to become the product-owned `ayonto_mentionevent` described in
   Target architecture above
-- the plug-in assembly and plug-in types — **the assembly exists in
-  [`server/`](../server/README.md); packaging it into this solution is blocked on a
-  registration configuration only an environment produces**
+- the plug-in assembly and its plug-in type — **shipped from solution 1.2.0.0**, built
+  from [`server/`](../server/README.md) and declared by a committed registration source
 - the security components the ledger needs
 - later: the dispatcher and per-channel delivery state
 

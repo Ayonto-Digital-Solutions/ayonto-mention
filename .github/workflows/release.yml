@@ -480,11 +480,13 @@ jobs:
           nothing else — it does **not** create a row in either table. Saving the
           record remains the only commit boundary.
 
-          **The server-side ingest is implemented in the repository, but it is not
-          in this package and no step is registered.** Nothing in this package
-          writes to either table, and there is no dispatcher and no e-mail, Teams
-          or in-app delivery. See \`server/README.md\` for what the ingest does and
-          what still has to happen in an environment before it can run.
+          **The server-side ingest assembly is included, but no host-specific step
+          is registered by this base solution.** So this package on its own still
+          creates no event rows: a step is the table-and-message registration, it
+          names a host table, and it therefore belongs to the host application's
+          own solution — one \`Create\` and one \`Update\` step per mention-enabled
+          table. There is no dispatcher and no e-mail, Teams or in-app delivery.
+          See \`server/README.md\` for the exact registration a host has to make.
 
           Solution version \`${SOLUTION_VERSION}\`, code component version
           \`${CONTROL_VERSION}\`. The two are versioned separately: a Dataverse
