@@ -221,6 +221,42 @@ describe("reanchorMentions", () => {
 
         expect(anchored).toEqual([{ start: 6, name: "Robin Fox", userId: "id-a" }]);
     });
+
+    it.each(["x@Dana ", "email@Dana ", ".@Dana "])(
+        "drops a mention when an edit removes its opening boundary: %s",
+        (text) => {
+            expect(
+                reanchorMentions(
+                    [{ start: 0, name: "Dana", userId: "u-dana" }],
+                    "@Dana ",
+                    text
+                )
+            ).toEqual([]);
+        }
+    );
+
+    it("drops a mention when the preceding space is deleted", () => {
+        expect(
+            reanchorMentions(
+                [{ start: 3, name: "Dana", userId: "u-dana" }],
+                "hi @Dana ",
+                "hi@Dana "
+            )
+        ).toEqual([]);
+    });
+
+    it.each(["(", "[", "{", ">", "\t", "\n"])(
+        "preserves a mention after inserting an allowed boundary: %j",
+        (prefix) => {
+            expect(
+                reanchorMentions(
+                    [{ start: 0, name: "Dana", userId: "u-dana" }],
+                    "@Dana ",
+                    `${prefix}@Dana `
+                )
+            ).toEqual([{ start: prefix.length, name: "Dana", userId: "u-dana" }]);
+        }
+    );
 });
 
 describe("splitTrackedMentions", () => {

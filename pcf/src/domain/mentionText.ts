@@ -212,9 +212,13 @@ export function mentionDeletionRange(
     return { start: span.start, end: takesFollowingSpace ? span.end + 1 : span.end };
 }
 
-/** True when "@name" stands at exactly this position and ends where a mention may end. */
+/** True when "@name" opens as a mention at this position and ends where a mention may end. */
 function readsAsMention(text: string, at: number, name: string): boolean {
-    return text.startsWith(`@${name}`, at) && endsMention(text, at + name.length + 1);
+    return (
+        opensMention(text, at) &&
+        text.startsWith(`@${name}`, at) &&
+        endsMention(text, at + name.length + 1)
+    );
 }
 
 /**
